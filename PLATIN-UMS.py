@@ -69,6 +69,25 @@ class ToggleFrame(tk.LabelFrame):
             self.enable()
 
 
+class StatusBox():
+    '''A simple label which changes color and gives indictation of the status of something'''
+    def __init__(self, frame, on_message='On', off_message='Off', status=False, width=17, padx=0, row=0, col=0):
+        self.on_message = on_message
+        self.off_message = off_message
+        self.status_box = tk.Label(frame, width=width, padx=padx)
+        self.status_box.grid(row=row, column=col)
+        self.set_status(status)
+        
+    def set_status(self, status):
+        if type(status) != bool:
+            raise Exception(TypeError)
+        
+        if status:
+            self.status_box.configure(bg='green2', text=self.on_message)
+        else:
+            self.status_box.configure(bg='light gray', text=self.off_message)
+            
+            
 class ConfirmButton(): 
     '''A confirmation button, will execute whatever function is passed to it when pressed. 
     Be sure to exclude parenthesis when passing the bound functions'''
@@ -109,7 +128,7 @@ class Switch():
     def __init__(self, frame, text, value=False, dep_state='normal', dependents=None, width=10, row=0, col=0):
         self.label = tk.Label(frame, text=text)
         self.label.grid(row=row, column=col)
-        self.switch =tk.Button(frame, width=width, command=self.toggle)
+        self.switch = tk.Button(frame, width=width, command=self.toggle)
         self.switch.grid(row=row, column=col+1)
     
         self.dependents = dependents
@@ -173,8 +192,7 @@ class CheckPanel():
         self.output = output
         self.state = state
         self.row_span = math.ceil(len(data)/ncols)
-        self.panel = [ GroupableCheck(frame, val, output, state=self.state, row=row_start + i//ncols,
-                                      col=col_start + i%ncols) for i, val in enumerate(data) ]
+        self.panel = [ GroupableCheck(frame, val, output, state=self.state, row=row_start + i//ncols, col=col_start + i%ncols) for i, val in enumerate(data) ]
         
     def wipe_output(self):
         self.output.clear()
@@ -198,7 +216,7 @@ class CheckPanel():
             self.enable()        
         
 class SelectionWindow():
-    '''The window used to select unfamiliars'''
+    '''The window used to select species for evaluation'''
     def __init__(self, main, parent_frame, size, selections, output, ncols=1):
         self.window = tk.Toplevel(main)
         self.window.title('Select Members to Include')
@@ -241,7 +259,7 @@ class TrainingWindow():
         self.status_frame = tk.Frame(self.training_window, bd=2, padx=11, relief='groove')
         self.status_frame.grid(row=0, column=0)
         
-        self.member_label = tk.Label(self.status_frame, text='Current Unfamiliar: ')
+        self.member_label = tk.Label(self.status_frame, text='Current Species: ')
         self.curr_member = tk.Label(self.status_frame)
         self.slice_label = tk.Label(self.status_frame, text='Current Data Slice: ')
         self.curr_slice = tk.Label(self.status_frame)
@@ -319,8 +337,8 @@ class PLATINUMS_App():
     def __init__(self, main):
         #Main Window
         self.main = main
-        self.main.title('PLATIN-UMS 4.1.9-alpha')
-        self.main.geometry('445x395')
+        self.main.title('PLATIN-UMS 4.1.10-alpha')
+        self.main.geometry('445x420')
 
         #Frame 1
         self.data_frame = ToggleFrame(self.main, 'Select CSV to Read: ', padx=21, pady=5, row=0)
@@ -334,13 +352,12 @@ class PLATINUMS_App():
         
         self.csv_menu = Dyn_OptionMenu(self.data_frame, self.chosen_file, (None,) , width=28, colspan=2)
         self.read_label = tk.Label(self.data_frame, text='Read Status:')
-        self.read_status = tk.Label(self.data_frame, bg='light gray', padx=30, text='No File Read')
+        self.read_status = StatusBox(self.data_frame, on_message='CSV Read!', off_message='No File Read', row=1, col=1)
         self.refresh_button = tk.Button(self.data_frame, text='Refresh CSVs', command=self.update_csvs, padx=15)
         self.confirm_data = ConfirmButton(self.data_frame, self.import_data, padx=2, row=1, col=2)
         
-        self.read_label.grid(row=1, column=0)
-        self.read_status.grid(row=1, column=1)
         self.refresh_button.grid(row=0, column=2)
+        self.read_label.grid(row=1, column=0)
         
         self.update_csvs() # populate csv menu for the first time
         
@@ -349,6 +366,7 @@ class PLATINUMS_App():
         self.read_mode = tk.StringVar()
         self.read_mode.set(None)
         self.selections = []
+        self.choices = None
         
         self.mode_buttons = [tk.Radiobutton(self.input_frame, text=mode, value=mode, var=self.read_mode, command=self.further_sel) 
                              for mode in ('Select All', 'By Family', 'By Species') ]
@@ -362,11 +380,11 @@ class PLATINUMS_App():
         self.batchsize = None
         self.learnrate = None
         
-        self.hyper_frame = ToggleFrame(self.main, 'Set Hyperparameters: ', padx=34, pady=5, row=2)
-        self.epoch_entry = LabelledEntry(self.hyper_frame, 'Epochs:', tk.IntVar(), default=8)
-        self.batchsize_entry = LabelledEntry(self.hyper_frame, 'Batchsize:', tk.IntVar(), default=32, row=1)
-        self.learnrate_entry = LabelledEntry(self.hyper_frame, 'Learnrate:', tk.DoubleVar(), default=2e-5, col=3)
-        self.confirm_hyperparams = ConfirmButton(self.hyper_frame, self.confirm_hp, row=1, col=4, sticky='e')
+        self.hyper_frame = ToggleFrame(self.main, 'Set Hyperparameters: ', padx=8, pady=5, row=2)
+        self.epoch_entry = LabelledEntry(self.hyper_frame, 'Epochs:', tk.IntVar(), width=19, default=8)
+        self.batchsize_entry = LabelledEntry(self.hyper_frame, 'Batchsize:', tk.IntVar(), width=19, default=32, row=1)
+        self.learnrate_entry = LabelledEntry(self.hyper_frame, 'Learnrate:', tk.DoubleVar(), width=18, default=2e-5, col=3)
+        self.confirm_hyperparams = ConfirmButton(self.hyper_frame, self.confirm_hp, row=1, col=3, cs=2, sticky='e')
         self.hyper_frame.disable()
         
         #Frame 4
@@ -375,16 +393,19 @@ class PLATINUMS_App():
         self.slice_decrement = None
         self.num_slices = None
         
-        self.param_frame = ToggleFrame(self.main, 'Set Training Parameters: ', padx=15, pady=5, row=3)
-        self.stop_switch = Switch(self.param_frame, 'Early Stopping: ', row=0, col=2)
-        self.trim_switch = Switch(self.param_frame, 'RIP Trimming: ', row=1, col=2)
-        self.n_slice_entry = LabelledEntry(self.param_frame, 'Number of Slices:', tk.IntVar(), default=1, row=2, col=1)
-        self.upper_bound_entry = LabelledEntry(self.param_frame, 'Upper Bound:', tk.IntVar(), default=400, row=2, col=3)
-        self.slice_decrement_entry = LabelledEntry(self.param_frame, 'Slice Decrement:', tk.IntVar(), default=50, row=3, col=1)
-        self.lower_bound_entry = LabelledEntry(self.param_frame, 'Lower Bound:', tk.IntVar(), default=50, row=3, col=3)
-        self.confirm_training_params = ConfirmButton(self.param_frame, self.confirm_tparams, row=4, col=3, cs=2, sticky='e')
+        self.param_frame = ToggleFrame(self.main, 'Set Training Parameters: ', padx=9, pady=5, row=3)
+        self.fam_switch = Switch(self.param_frame, 'Familiar Training :', row=0, col=1)
+        self.stop_switch = Switch(self.param_frame, 'Early Stopping: ', row=1, col=1)
+        self.trim_switch = Switch(self.param_frame, 'RIP Trimming: ', row=2, col=1)
+        
+        self.n_slice_entry = LabelledEntry(self.param_frame, 'Number of Slices:', tk.IntVar(), default=1, row=3, col=0)
+        self.upper_bound_entry = LabelledEntry(self.param_frame, 'Upper Bound:', tk.IntVar(), default=400, row=3, col=2)
+        self.slice_decrement_entry = LabelledEntry(self.param_frame, 'Slice Decrement:', tk.IntVar(), default=50, row=4, col=0)
+        self.lower_bound_entry = LabelledEntry(self.param_frame, 'Lower Bound:', tk.IntVar(), default=50, row=4, col=2)
+        self.confirm_training_params = ConfirmButton(self.param_frame, self.confirm_tparams, row=5, col=2, cs=2, sticky='e')
 
         self.trim_switch.dependents = (self.n_slice_entry, self.upper_bound_entry, self.slice_decrement_entry, self.lower_bound_entry)
+        self.switches = (self.fam_switch, self.stop_switch, self.trim_switch)
         self.keras_callbacks = []
         
         self.param_frame.disable()
@@ -401,7 +422,7 @@ class PLATINUMS_App():
         self.frames = (self.data_frame, self.input_frame, self.hyper_frame, self.param_frame)
         self.entries = (self.epoch_entry, self.batchsize_entry, self.learnrate_entry, self.n_slice_entry,
                         self.upper_bound_entry, self.slice_decrement_entry, self.lower_bound_entry)
-        
+
         self.exit_button = tk.Button(self.main, text='Exit', padx=22, pady=22, bg='red', command=self.shutdown)
         self.reset_button = tk.Button(self.main, text='Reset', padx=20, bg='orange', command=self.reset)
         self.exit_button.grid(row=0, column=4)
@@ -425,10 +446,10 @@ class PLATINUMS_App():
     def reset(self):
         '''reset the GUI to the opening state, along with all variables'''
         self.isolate(self.data_frame)
-        self.trim_switch.disable()
-        self.stop_switch.disable()
+        for switch in self.switches:
+            switch.disable()
         
-        self.read_status.configure(bg='light grey', text='No File Read')
+        self.read_status.set_status(False)
         self.train_button.configure(state='disabled')
         self.chosen_file.set('--Choose a CSV--')
         self.read_mode.set(None)
@@ -508,9 +529,8 @@ class PLATINUMS_App():
             messagebox.showerror('File Error', 'No CSV selected')
         else:
             self.read_chem_data()
-            self.read_status.configure(bg='green2', text='CSV Read!')
+            self.read_status.set_status(True)
             self.isolate(self.input_frame)
-
     
     #Frame 2 (Input) Methods
     def further_sel(self): 
@@ -526,7 +546,7 @@ class PLATINUMS_App():
     def confirm_inputs(self):
         '''Confirm species input selections'''
         if self.selections == []:
-            messagebox.showerror('No selections made', 'Please select unfamiliars')
+            messagebox.showerror('No selections made', 'Please select species to evaluate')
         else:
             if self.read_mode.get() == 'By Family':
                 self.selections = [species for family in self.selections for species in self.all_species if self.get_family(species) == family]
@@ -540,7 +560,7 @@ class PLATINUMS_App():
         self.batchsize = self.batchsize_entry.get_value()
         self.learnrate = self.learnrate_entry.get_value()
         self.isolate(self.param_frame)
-        self.trim_switch.disable()
+        self.trim_switch.disable()   #ensures that the trimming menu stays greyed out, not necessary for the other switches 
     
     
     #Frame 4 (training parameter) Methods
@@ -579,7 +599,6 @@ class PLATINUMS_App():
         self.reset_training()
         self.train_window = TrainingWindow(self.main, self.total_rounds, self.num_epochs, self.begin_training, self.reset)
         self.keras_callbacks.append( TkEpochs(self.train_window) )
-
         self.training()
                 
     def training(self, verbosity=False):
@@ -588,12 +607,14 @@ class PLATINUMS_App():
         num_spectra = 3
         
         for filename in os.listdir('.'):       # deletes results folders from prior trainings to prevent overwriting
-            if re.match('\A(Training Results)', filename):
+            if re.search('\A(Training Results)', filename):
                 self.train_window.set_status('Deleting {}'.format(filename) )
                 rmtree('./%s'% filename, ignore_errors=True)
         
         current_round = 0       
         RIP_trimming = self.trim_switch.value
+        fam_training = self.fam_switch.value  
+        
         for instance, member in enumerate(self.selections):
             for select_RIP in range(1 + int(RIP_trimming)):     # treats 0, 1 iteration as bool (optional true)
                 for segment in range(select_RIP and self.num_slices or 1):   
@@ -610,32 +631,39 @@ class PLATINUMS_App():
                         point_range = 'Full Spectra'
 
                 # DATA SELECTION AND ANALYSIS  
-                    unfam_data, unfam_titles, spectra_titles = [], [], []
-                    features, labels, families = [], [], []
-                    train_set_size, unfam_set_size = 0, 0
+                    eval_data, eval_titles, spectra_titles = [], [], []
+                    features, labels, occurrences = [], [], Counter()
+                    train_set_size, eval_set_size = 0, 0
                                                
                     for species, (data, vector) in self.data_from_file.items():
                         data = data[lower_bound:upper_bound]                      
-                        if re.findall('\A{}.*'.format(member), species):       # if the current species begins with <member>
-                            unfam_set_size += 1
-                            unfam_data.append(data)
-                            unfam_titles.append( (species, 'p') )
-                            if unfam_set_size <= num_spectra:
+                        if re.search('\A{}.*'.format(member), species):       # if the current species begins with <member>
+                            eval_set_size += 1
+                            eval_data.append(data)
+                            eval_titles.append( (species, 'p') )
+                                                        
+                            if eval_set_size <= num_spectra:
                                 spectra_titles.append( (species, 's') )
-                        else:                                            # add all other species to the training set (unfamiliar training only)
+                                
+                            if fam_training:
+                                train_set_size += 1
+                                features.append(data)
+                                labels.append(vector)
+                                occurrences[self.get_family(species)] += 1                         
+                        else:                                         
                             train_set_size += 1
                             features.append(data)
                             labels.append(vector)
-                            families.append(self.get_family(species))
+                            occurrences[self.get_family(species)] += 1
                                                
-                    unfam_titles.append( ('Standardized Summation', 'p') )
-                    occurrences = Counter(families)
-                    self.train_window.set_member( '{} ({} instances found)'.format(member, unfam_set_size) )
+                    eval_titles.append( ('Standardized Summation', 'p') )
+                    self.train_window.set_member( '{} ({} instances found)'.format(member, eval_set_size) )
                     self.train_window.set_slice(point_range)
                                                
                     x_train, x_test, y_train, y_test = train_test_split(np.array(features), np.array(labels), test_size=0.2)  
                     train_feat_and_lab = (x_train.shape[0], y_train.shape[0])
                     test_feat_and_lab = (x_test.shape[0], y_test.shape[0])
+                    print(occurrences)
 
                 # MODEL CREATION AND TRAINING
                     with tf.device('CPU:0'):                            
@@ -651,7 +679,7 @@ class PLATINUMS_App():
                         for (x, y, group) in ( (x_train, y_train, 'training'), (x_test, y_test, 'test') ):
                             print('{} features/labels in {} set ({} of the data)'.format(
                                   (x.shape[0], y.shape[0]), group, round(100 * x.shape[0]/train_set_size, 2)) )
-                        print('\n{} features total. Of the {} species in training dataset:'.format(train_set_size + unfam_set_size, train_set_size) )
+                        print('\n{} features total. Of the {} species in training dataset:'.format(train_set_size + eval_set_size, train_set_size) )
                         for family in self.family_mapping.keys():
                             print('    {}% of data are {}s'.format( round(100 * occurrences[family]/train_set_size, 2), family) ) 
                         model.summary()
@@ -672,9 +700,9 @@ class PLATINUMS_App():
                     hist_titles = [('Training Loss (Final = %0.2f)' % test_loss, 'm'),
                                    ('Training Accuracy (Final = %0.2f%%)' % (100 * test_acc), 'm')]
 
-                    # More intensive/accurate evaluation using our unfamiliar sample set
+                    # More intensive/accurate evaluation using the evaluation data we set aside for this species
                     preds, targets, num_correct = [], [], 0          
-                    for prediction in list( model.predict(np.array(unfam_data)) ):
+                    for prediction in list( model.predict(np.array(eval_data)) ):
                         target_index = self.family_mapping[self.get_family(member)].index(1)   # the index of the actual identity of current member
                         target = prediction[target_index]
                         
@@ -685,16 +713,16 @@ class PLATINUMS_App():
                     targets.sort(reverse=True)   # targets are sorted in reverse order for the Fermi plot
                     preds.append( [sum(i)/len(preds) for i in map(list, zip(*preds)) ])   # add summation of the predictions to the end of preds
                     
-                    fermi_title = ('{} FDP, {}/{} correct'.format(member, num_correct, unfam_set_size),'f')                 
-                    data = hist_metrics + unfam_data[:num_spectra] + [targets] + preds    # wrap the data to be plotted into a single data list
-                    titles = hist_titles + spectra_titles + [fermi_title] + unfam_titles  # wrap the names of plots into a single title list
+                    fermi_title = ('{} FDP, {}/{} correct'.format(member, num_correct, eval_set_size),'f')                 
+                    data = hist_metrics + eval_data[:num_spectra] + [targets] + preds    # wrap the data to be plotted into a single data list
+                    titles = hist_titles + spectra_titles + [fermi_title] + eval_titles  # wrap the names of plots into a single title list
 
                     if point_range not in self.summaries:    # create a new entry if none exists for the current spectrum slice                                     
                         self.summaries[point_range] = ( [], [], [] )
                     fermi_data, names, scores = self.summaries[point_range]
                     fermi_data.append(targets)
                     names.append(fermi_title)   # add plot data, titles, and prediction scores to relevant sub-dict
-                    scores.append( (member, num_correct/unfam_set_size) )
+                    scores.append( (member, num_correct/eval_set_size) )
 
                     self.train_window.set_status('Writing Results to Folders...')    
                     dir_name = './Training Results, {}'.format(point_range)   # ensure that a results folder for the current slice range exists
