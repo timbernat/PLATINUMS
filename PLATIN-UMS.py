@@ -24,7 +24,7 @@ from sklearn.model_selection import train_test_split
 
 
 # SECTION 2 : some custom widget classes to make building and managing the GUI easier on myself ---------------------------------------------------
-class Dyn_OptionMenu():
+class Dyn_OptionMenu:
     '''My addon to the TKinter OptionMenu, adds methods to conveniently update menu contents'''
     def __init__(self, frame, var, options, width=10, row=0, col=0, colspan=1):
         self.options = options
@@ -69,7 +69,7 @@ class ToggleFrame(tk.LabelFrame):
             self.enable()
 
 
-class StatusBox():
+class StatusBox:
     '''A simple label which changes color and gives indictation of the status of something'''
     def __init__(self, frame, on_message='On', off_message='Off', status=False, width=17, padx=0, row=0, col=0):
         self.on_message = on_message
@@ -88,7 +88,7 @@ class StatusBox():
             self.status_box.configure(bg='light gray', text=self.off_message)
             
             
-class ConfirmButton(): 
+class ConfirmButton: 
     '''A confirmation button, will execute whatever function is passed to it when pressed. 
     Be sure to exclude parenthesis when passing the bound functions'''
     def __init__(self, frame, funct, padx=5, row=0, col=0, cs=1, sticky=None):
@@ -96,7 +96,7 @@ class ConfirmButton():
         self.button.grid(row=row, column=col, columnspan=cs, sticky=sticky)
       
     
-class LabelledEntry():
+class LabelledEntry:
     '''An entry with an adjacent label to the right. Use "self.get_value()" method to retrieve state of
     variable. Be sure to leave two columns worth of space for this widget'''
     def __init__(self, frame, text, var, state='normal', default=None, width=10, row=0, col=0):
@@ -122,7 +122,7 @@ class LabelledEntry():
         self.entry.configure(**kwargs)
         
     
-class Switch(): 
+class Switch: 
     '''A switch button, clicking inverts the boolean state and button display. State can be accessed via
     the <self>.state() method or with the <self>.var.get() attribute to use dynamically with tkinter'''
     def __init__(self, frame, text, value=False, dep_state='normal', dependents=None, width=10, row=0, col=0):
@@ -164,7 +164,7 @@ class Switch():
             self.enable()  
            
         
-class GroupableCheck():
+class GroupableCheck:
     '''A checkbutton which will add or remove its value to an output list
     (passed as an argument when creating an instance) based on its check status'''
     def __init__(self, frame, value, output, state='normal', row=0, col=0):
@@ -186,7 +186,7 @@ class GroupableCheck():
     def configure(self, **kwargs):
         self.cb.configure(**kwargs)
             
-class CheckPanel():
+class CheckPanel:
     '''A panel of GroupableChecks, allows for simple selectivity of the contents of some list'''
     def __init__(self, frame, data, output, state='normal', ncols=4, row_start=0, col_start=0):
         self.output = output
@@ -215,7 +215,7 @@ class CheckPanel():
         else:
             self.enable()        
         
-class SelectionWindow():
+class SelectionWindow:
     '''The window used to select species for evaluation'''
     def __init__(self, main, parent_frame, size, selections, output, ncols=1):
         self.window = tk.Toplevel(main)
@@ -244,7 +244,7 @@ class TkEpochs(Callback):
         if self.tw.end_training:
             self.model.stop_training = True
         
-class TrainingWindow():
+class TrainingWindow:
     '''The window which displays training progress, was easier to subclass outside of the main GUI class'''
     def __init__(self, main, total_rounds, num_epochs, train_funct, reset_funct):
         self.total_rounds = total_rounds
@@ -333,7 +333,7 @@ class TrainingWindow():
         self.training_window.destroy()
         
 # Start of actual GUI app class code ------------------------------------------------------------------------------------------------------------
-class PLATINUMS_App():
+class PLATINUMS_App:
     def __init__(self, main):
         #Main Window
         self.main = main
@@ -454,11 +454,10 @@ class PLATINUMS_App():
         self.chosen_file.set('--Choose a CSV--')
         self.read_mode.set(None)
         
-        for datum in (self.data_from_file, self.selections):
+        for datum in (self.data_from_file, self.selections, self.family_mapping):
             datum.clear()
         self.all_species = set()
         self.families = set()
-        self.family_mappings = {}
         
         for entry in self.entries:
             entry.reset_default()
@@ -467,25 +466,29 @@ class PLATINUMS_App():
 
                 
     #Frame 1 (Reading) Methods 
-    def get_species(self, species):
-        '''Strips extra numbers off the end of the name of a' species in a csv and just tells you the species name'''
-        return re.sub('(\s|-)\d+\s*\Z', '', species)  # regex to crop off terminal digits in a variety of possible 
+    def isolate_species(self, species):
+        '''Strips extra numbers off the end of the name of a species in a csv and just tells you the species name'''
+        return re.sub('(\s|-)\d+\s*\Z', '', species)  # regex to crop off terminal digits ofin a variety of possible 
     
     def get_family(self, species):
         '''Takes the name of a species and returns the chemical family that that species belongs to, based on IUPAC naming conventions'''
         iupac_suffices = {   'ane':'alkane',
                             'ene':'alkene',
                             'yne':'alkyne',
-                            'oic acid': 'carboxylic acid',
-                            #'oate':'ester',
+                            'ic acid': 'carboxylic acid',
+                            #'ate':'ester',
                             'ol':'alcohol',
                             'ate':'acetate',
                             'ether':'ether',
                             'al':'aldehyde',
                             'one':'ketone'  }                    
         for regex, family in iupac_suffices.items():
-            if re.search('(?i){}'.format(regex), species):  # ignore case/capiatlization (particular to case of ethers)
+            if re.search('(?i){}\Z'.format(regex), isolate_species(species) ):  # ignore capitalization (particular to ethers), only check end of name (particular to pinac<ol>one)
                 return family
+            
+    def get_vector(self, species):
+        '''Return the mapping vector associated with a given species'''
+        return self.family_mapping[ self.get_family(species) ]
     
     def read_chem_data(self): 
         '''Used to read and format the data from the csv provided into a form usable by the training program
@@ -497,7 +500,7 @@ class PLATINUMS_App():
                 spectrum_data = [float(i) for i in row[1:]]  # convert data point from str to floats
                 
                 self.data_from_file[label] = spectrum_data
-                self.all_species.add( self.get_species(label) )
+                self.all_species.add( self.isolate_species(label) )
                 self.families.add( self.get_family(label) )
                 if not self.spectrum_size:
                     self.spectrum_size = len(spectrum_data)
@@ -511,8 +514,7 @@ class PLATINUMS_App():
             self.family_mapping[family] = one_hot_vector
                                    
         for species, data in self.data_from_file.items():  # add mapping vector to all data entries
-            vector = self.family_mapping[self.get_family(species)]
-            self.data_from_file[species] = (data, vector)
+            self.data_from_file[species] = ( data, self.get_vector(species) )
     
     def update_csvs(self):
         '''Update the CSV dropdown selection to catch any changes in the files present'''
@@ -531,6 +533,7 @@ class PLATINUMS_App():
             self.read_chem_data()
             self.read_status.set_status(True)
             self.isolate(self.input_frame)
+    
     
     #Frame 2 (Input) Methods
     def further_sel(self): 
@@ -590,6 +593,7 @@ class PLATINUMS_App():
                 self.param_frame.disable()
                 self.train_button.configure(state='normal')
         
+        
     #Training and Neural Net-Specific Methods    
     def begin_training(self):
         self.total_rounds = len(self.selections)
@@ -631,7 +635,8 @@ class PLATINUMS_App():
                         point_range = 'Full Spectra'
 
                 # DATA SELECTION AND ANALYSIS  
-                    eval_data, eval_titles, spectra_titles = [], [], []
+                    eval_data, eval_titles = [], []
+                    plotting_data, plotting_titles = [], []
                     features, labels, occurrences = [], [], Counter()
                     train_set_size, eval_set_size = 0, 0
                                                
@@ -643,7 +648,8 @@ class PLATINUMS_App():
                             eval_titles.append( (species, 'p') )
                                                         
                             if eval_set_size <= num_spectra:
-                                spectra_titles.append( (species, 's') )
+                                plotting_data.append( data )
+                                plotting_titles.append( (species, 's') )
                                 
                             if fam_training:
                                 train_set_size += 1
@@ -663,7 +669,6 @@ class PLATINUMS_App():
                     x_train, x_test, y_train, y_test = train_test_split(np.array(features), np.array(labels), test_size=0.2)  
                     train_feat_and_lab = (x_train.shape[0], y_train.shape[0])
                     test_feat_and_lab = (x_test.shape[0], y_test.shape[0])
-                    print(occurrences)
 
                 # MODEL CREATION AND TRAINING
                     with tf.device('CPU:0'):                            
@@ -683,39 +688,42 @@ class PLATINUMS_App():
                         for family in self.family_mapping.keys():
                             print('    {}% of data are {}s'.format( round(100 * occurrences[family]/train_set_size, 2), family) ) 
                         model.summary()
-                                      
-                    hist = model.fit(x_train, y_train, epochs=self.num_epochs, batch_size=self.batchsize,   # model training occurs here
-                                     callbacks=self.keras_callbacks, verbose=verbosity and 2 or 0)  
+                      
+                    # model training is executed in the single line below
+                    hist = model.fit(x_train, y_train, epochs=self.num_epochs, batch_size=self.batchsize, callbacks=self.keras_callbacks, verbose=verbosity and 2 or 0)  
                     
                     if self.train_window.end_training:
                         messagebox.showerror('Training has Stopped', 'Training aborted by user;\nProceed from Progress Window')
                         self.train_window.button_frame.enable()
-                        return None     # without this, aborting training only pauses one iteration of loop
+                        return     # without this, aborting training only pauses one iteration of loop
 
-                # EVALUATION OF PERFORMANCE
-                    test_loss, test_acc = model.evaluate(x_test, y_test, verbose=2)    # keras' self-evaluation, not the most reliable                    
-                    if verbosity:
+                # EVALUATION OF PERFORMANCE                  
+                    test_loss, test_acc = model.evaluate(x_test, y_test, verbose=(verbosity and 2 or 0))
+                    if verbosity:     # keras' self-evaluation, not the most reliable    
                         print('\nTest loss: {} \nTest accuracy: {} \n'.format(test_loss, test_acc))
-                    hist_metrics = [hist.history['loss'], hist.history['accuracy']]
-                    hist_titles = [('Training Loss (Final = %0.2f)' % test_loss, 'm'),
-                                   ('Training Accuracy (Final = %0.2f%%)' % (100 * test_acc), 'm')]
+                   
+                    plotting_data.extend( (hist.history['loss'], hist.history['accuracy']) )
+                    plotting_titles.extend( (('Training Loss (Final = %0.2f)' % test_loss, 'm'), ('Training Accuracy (Final = %0.2f%%)' % (100 * test_acc), 'm')) )
 
                     # More intensive/accurate evaluation using the evaluation data we set aside for this species
                     preds, targets, num_correct = [], [], 0          
-                    for prediction in list( model.predict(np.array(eval_data)) ):
-                        target_index = self.family_mapping[self.get_family(member)].index(1)   # the index of the actual identity of current member
+                    for prediction in list( model.predict( np.array(eval_data)) ):
+                        target_index = self.get_vector(member).index(1)   # the index of the actual identity of current member
                         target = prediction[target_index]
                         
-                        preds.append(prediction)                     
+                        preds.append(prediction)  
                         targets.append(target)                       
                         if max(prediction) == target:
                             num_correct += 1  
-                    targets.sort(reverse=True)   # targets are sorted in reverse order for the Fermi plot
                     preds.append( [sum(i)/len(preds) for i in map(list, zip(*preds)) ])   # add summation of the predictions to the end of preds
+                    targets.sort(reverse=True)   # targets are sorted in reverse order for the Fermi plot
+                    fermi_title = ('{}, {}/{} correct'.format(member, num_correct, eval_set_size),'f')
                     
-                    fermi_title = ('{} FDP, {}/{} correct'.format(member, num_correct, eval_set_size),'f')                 
-                    data = hist_metrics + eval_data[:num_spectra] + [targets] + preds    # wrap the data to be plotted into a single data list
-                    titles = hist_titles + spectra_titles + [fermi_title] + eval_titles  # wrap the names of plots into a single title list
+                    plotting_data.append( targets )
+                    plotting_titles.append( fermi_title )
+                    
+                    plotting_data.extend(preds)
+                    plotting_titles.extend(eval_titles)
 
                     if point_range not in self.summaries:    # create a new entry if none exists for the current spectrum slice                                     
                         self.summaries[point_range] = ( [], [], [] )
@@ -725,13 +733,11 @@ class PLATINUMS_App():
                     scores.append( (member, num_correct/eval_set_size) )
 
                     self.train_window.set_status('Writing Results to Folders...')    
-                    dir_name = './Training Results, {}'.format(point_range)   # ensure that a results folder for the current slice range exists
+                    dir_name = './Training Results, {}'.format(point_range)   
                     if not os.path.exists(dir_name):                                                           
                         os.makedirs(dir_name)
 
-                    self.adagraph(data, titles, 6, lower_bound, upper_bound)  # produce summary plot 
-                    plt.savefig('{}/{}.png'.format(dir_name, member))          # save current plot of results (trimming is labelled)
-                    plt.close() 
+                    self.adagraph(plotting_data, plotting_titles, 6, lower_bound, upper_bound, '{}/{}.png'.format(dir_name, member) )
                     gc.collect()    # collect any junk remaining in RAM
 
         self.train_window.set_status('Distributing Result Summaries...')
@@ -740,9 +746,7 @@ class PLATINUMS_App():
                 with open('./Training Results, {}/Scores.txt'.format(point_range), 'a') as score_file:
                     for (species, score) in scores:
                         score_file.write('{} : {}\n'.format(species, score) )
-                self.adagraph(fermi_data, names, 5, None, None)
-                plt.savefig('./Training Results, {}/Fermi Summary'.format(point_range) )
-                plt.close()
+                self.adagraph(fermi_data, names, 5, None, None, './Training Results, {}/Fermi Summary.png'.format(point_range) )
         
         self.train_window.button_frame.enable()
         self.train_window.set_status('Finished')
@@ -756,8 +760,8 @@ class PLATINUMS_App():
         self.summaries.clear()
         self.keras_callbacks.clear()
     
-    def adagraph(self, data_list, name_list, ncols, lower_bound, upper_bound):  
-        '''a general tidy internal graphing utility of my own devising, used to produce all manner of plots during training'''
+    def adagraph(self, data_list, name_list, ncols, lower_bound, upper_bound, save_dir):  # ADD AXIS LABELS!
+        '''a general tidy internal graphing utility of my own devising, used to produce all manner of plots during training with one function'''
         nrows = math.ceil(len(data_list)/ncols)  #  determine the necessary number of rows needed to accomodate the data
         display_size = 20                        # 20 seems to be good size for jupyter viewing
         
@@ -767,25 +771,27 @@ class PLATINUMS_App():
                 row, col = divmod(idx, ncols)      
                 curr_plot = axs[row][col]  
             else:                                # special case for indexing plots with only one row; my workaround of implementation in matplotlib
-                curr_plot = axs[idx]              
-            
+                curr_plot = axs[idx]    
+                
             plot_title, plot_type = name_list[idx]
             curr_plot.set_title(plot_title)
-            
             if plot_type == 's':                 # for plotting spectra
                 curr_plot.plot(range(lower_bound, upper_bound), data, 'k,') 
                 curr_plot.axis( [lower_bound , upper_bound+1, min(data), max(data)] )
             elif plot_type == 'p':               # for plotting predictions
-                bar_color = (plot_title == 'Standardized Summation' and 'r' or 'b')
+                bar_color = ('Summation' in plot_title and 'r' or 'b')
                 curr_plot.bar( self.family_mapping.keys(), data, color=bar_color)  
                 curr_plot.set_ylim(0,1)
                 curr_plot.tick_params(axis='x', labelrotation=45)
             elif plot_type == 'm':               # for plotting metrics from training
-                curr_plot.plot(range(1, self.num_epochs + 1), data, idx and 'g' or 'r') # rework the alternating color scheme
-            elif plot_type == 'f':               # for the fermi-dirac plots
+                line_color = ('Loss' in plot_title and 'r' or 'g')
+                curr_plot.plot(range(1, self.num_epochs + 1), data, line_color) 
+            elif plot_type == 'f':               # for plotting fermi-dirac plots
                 curr_plot.plot( [i/len(data) for i in range(len(data))], data, linestyle='-', color='m')  # normalized by dividing by length
                 curr_plot.axis( [0, 1, 0, 1] )
         plt.tight_layout()
+        plt.savefig(save_dir)
+        plt.close('all')
 
 if __name__ == '__main__':        
     main_window = tk.Tk()
