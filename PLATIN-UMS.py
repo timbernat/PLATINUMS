@@ -246,10 +246,11 @@ class TkEpochs(Callback):
         
 class TrainingWindow:
     '''The window which displays training progress, was easier to subclass outside of the main GUI class'''
-    def __init__(self, main, total_rounds, num_epochs, train_funct, reset_funct):
+    def __init__(self, main, total_rounds, num_epochs, train_funct, reset_funct, train_button):
         self.total_rounds = total_rounds
         self.num_epochs = num_epochs
         self.main = main
+        self.train_button = train_button
         self.training_window = tk.Toplevel(main)
         self.training_window.title('Training Progress')
         self.training_window.geometry('390x142')
@@ -330,6 +331,7 @@ class TrainingWindow:
         self.main.update()
         
     def destroy(self):
+        self.train_button.configure(state='normal')
         self.training_window.destroy()
         
 # Start of actual GUI app class code ------------------------------------------------------------------------------------------------------------
@@ -337,14 +339,15 @@ class PLATINUMS_App:
     def __init__(self, main):
         #Main Window
         self.main = main
-        self.main.title('PLATIN-UMS 4.1.10-alpha')
+        self.main.title('PLATIN-UMS 4.2.1-alpha')
         self.main.geometry('445x420')
+        self.preds = None
 
         #Frame 1
         self.data_frame = ToggleFrame(self.main, 'Select CSV to Read: ', padx=21, pady=5, row=0)
         self.chosen_file = tk.StringVar()
         self.chosen_file.set('--Choose a CSV--')
-        self.data_from_file = {}
+        self.chem_data = {}
         self.all_species = set()
         self.families = set()
         self.family_mapping = {}
@@ -454,7 +457,7 @@ class PLATINUMS_App:
         self.chosen_file.set('--Choose a CSV--')
         self.read_mode.set(None)
         
-        for datum in (self.data_from_file, self.selections, self.family_mapping):
+        for datum in (self.chem_data, self.selections, self.family_mapping):
             datum.clear()
         self.all_species = set()
         self.families = set()
@@ -463,6 +466,10 @@ class PLATINUMS_App:
             entry.reset_default()
         
         self.reset_training()
+        
+    def average(self, iterable):
+        '''Caculcate and return average of an iterable'''
+        return sum(iterable)/len(iterable)
 
                 
     #Frame 1 (Reading) Methods 
@@ -487,10 +494,6 @@ class PLATINUMS_App:
             # ratioanle for regex: ignore capitalization (particular to ethers), only check end of name (particular to pinac<ol>one)
             if re.search('(?i){}\Z'.format(regex), self.isolate_species(species) ):  
                 return family
-            
-    def get_vector(self, species):
-        '''Return the mapping vector associated with a given species'''
-        return self.family_mapping[ self.get_family(species) ]
     
     def read_chem_data(self): 
         '''Used to read and format the data from the csv provided into a form usable by the training program
@@ -498,25 +501,25 @@ class PLATINUMS_App:
         csv_name = './{}.csv'.format( self.chosen_file.get() )
         with open(csv_name, 'r') as file:
             for row in csv.reader(file):
-                label = row[0]
+                name = row[0]
                 spectrum_data = [float(i) for i in row[1:]]  # convert data point from str to floats
                 
-                self.data_from_file[label] = spectrum_data
-                self.all_species.add( self.isolate_species(label) )
-                self.families.add( self.get_family(label) )
+                self.chem_data[name] = spectrum_data
+                self.all_species.add( self.isolate_species(name) )
+                self.families.add( self.get_family(name) )
                 if not self.spectrum_size:
                     self.spectrum_size = len(spectrum_data)
 
         self.upper_bound_entry.set_value(self.spectrum_size)
         self.all_species, self.families = sorted(self.all_species), sorted(self.families)  # sort and convert to lists
         
-        num_families = len(self.families)    # generate family mapping based what families present in the current dataset
         for index, family in enumerate(self.families):
             one_hot_vector = tuple(i == index and 1 or 0 for i in range(len(self.families)) )
             self.family_mapping[family] = one_hot_vector
                                    
-        for species, data in self.data_from_file.items():  # add mapping vector to all data entries
-            self.data_from_file[species] = ( data, self.get_vector(species) )
+        for species, data in self.chem_data.items():  # add mapping vector to all data entries
+            vector = self.family_mapping[ self.get_family(species) ]
+            self.chem_data[species] = (data, vector)
     
     def update_csvs(self):
         '''Update the CSV dropdown selection to catch any changes in the files present'''
@@ -546,7 +549,7 @@ class PLATINUMS_App:
         elif self.read_mode.get() == 'By Species':
             SelectionWindow(self.main, self.input_frame, '1000x210', self.all_species, self.selections, ncols=8)
         elif self.read_mode.get() == 'By Family':
-            SelectionWindow(self.main, self.input_frame, '250x90', self.families, self.selections, ncols=3)
+            SelectionWindow(self.main, self.input_frame, '260x90', self.families, self.selections, ncols=3)
 
     def confirm_inputs(self):
         '''Confirm species input selections'''
@@ -603,14 +606,15 @@ class PLATINUMS_App:
             self.total_rounds += len(self.selections)*self.num_slices
 
         self.reset_training()
-        self.train_window = TrainingWindow(self.main, self.total_rounds, self.num_epochs, self.begin_training, self.reset)
+        self.train_button.configure(state='disabled')
+        self.train_window = TrainingWindow(self.main, self.total_rounds, self.num_epochs, self.begin_training, self.reset, self.train_button)
         self.keras_callbacks.append( TkEpochs(self.train_window) )
         self.training()
                 
     def training(self, verbosity=False):
         '''The neural net training function itself'''
         start_time = time()    # log start of runtime
-        num_spectra = 3
+        num_spectra = 2
         
         for filename in os.listdir('.'):       # deletes results folders from prior trainings to prevent overwriting
             if re.search('\A(Training Results)', filename):
@@ -619,7 +623,7 @@ class PLATINUMS_App:
         
         current_round = 0       
         RIP_trimming = self.trim_switch.value
-        fam_training = self.fam_switch.value  
+        fam_training = self.fam_switch.value 
         
         for instance, member in enumerate(self.selections):
             for select_RIP in range(1 + int(RIP_trimming)):     # treats 0, 1 iteration as bool (optional true)
@@ -637,16 +641,19 @@ class PLATINUMS_App:
                         lower_bound, upper_bound =  0, self.spectrum_size
                         point_range = 'Full Spectra'
                     self.train_window.set_slice(point_range) 
+                    
+                    curr_family = self.get_family(member)
 
                 # EVALUATION AND TRAINING SET SELECTION AND SPLITTING 
                     plot_list = []
                     eval_data, eval_titles = [], []
                     features, labels, occurrences = [], [], Counter()
                     train_set_size, eval_set_size = 0, 0
-                                               
-                    for species, (data, vector) in self.data_from_file.items():
+                         
+                    for species, (data, vector) in self.chem_data.items():
                         data = data[lower_bound:upper_bound]                      
-                        if re.search('\A{}.*'.format(member), species):       # if the current species begins with <member>
+                        #if re.search('\A{}.*'.format(member), species):       # if the current species begins with <member>
+                        if self.isolate_species(species) == member:
                             eval_set_size += 1
                             eval_data.append(data)
                             eval_titles.append(species)
@@ -681,62 +688,59 @@ class PLATINUMS_App:
                         for (x, y, group) in ( (x_train, y_train, 'training'), (x_test, y_test, 'test') ):
                             print('{} features/labels in {} set ({} of the data)'.format(
                                   (x.shape[0], y.shape[0]), group, round(100 * x.shape[0]/train_set_size, 2)) )
-                        print('\n{} features total. Of the {} species in training dataset:'.format(train_set_size + eval_set_size, train_set_size) )
+                        print('\n{} features total. Of the {} species in training dataset:'.format(len(self.chem_data), train_set_size) )
                         for family in self.family_mapping.keys():
-                            print('    {}% of data are {}s'.format( round(100 * occurrences[family]/train_set_size, 2), family) ) 
+                            print('    {}% of data are {}'.format( round(100 * occurrences[family]/train_set_size, 2), family) ) 
                         model.summary()
                       
-                    hist = model.fit(x_train, y_train, epochs=self.num_epochs, batch_size=self.batchsize,   # model training is executed in the single line below
-                                     callbacks=self.keras_callbacks, verbose=verbosity and 2 or 0)  
+                    # model training is invoked in the line below
+                    hist = model.fit(x_train, y_train, epochs=self.num_epochs, batch_size=self.batchsize, callbacks=self.keras_callbacks, verbose=verbosity and 2 or 0)  
+                    test_loss, test_acc = model.evaluate(x_test, y_test, verbose=(verbosity and 2 or 0))  # keras' self evaluation of loss and accuracy metrics
                     
                     if self.train_window.end_training:  # condition to escape training loop of training is aborted
                         messagebox.showerror('Training has Stopped', 'Training aborted by user;\nProceed from Progress Window')
                         self.train_window.button_frame.enable()
                         return     # without this, aborting training only pauses one iteration of loop
 
-                # EVALUATION OF PERFORMANCE, DISTRIBUTION OF FEEDBACK DATA                  
-                    test_loss, test_acc = model.evaluate(x_test, y_test, verbose=(verbosity and 2 or 0))  # keras' self evaluation of loss and accuracy
-                    plot_list.append( (hist.history['loss'], 'Training Loss (Final = %0.2f)' % test_loss, 'm') )
-                    plot_list.append( (hist.history['accuracy'], 'Training Accuracy (Final = %0.2f%%)' % (100 * test_acc), 'm') )
-
-                    preds, targets, num_correct = [], [], 0       # evaluation of model predictions over the eval set
-                    for prediction in list( model.predict( np.array(eval_data)) ):
-                        preds.append(prediction)
-                        
-                        target_index = self.get_vector(member).index(1)   # the index of the actual identity of current member
-                        target = prediction[target_index]  
-                        targets.append(target)  
+                # PREDICTION OVER EVALUATION SET, EVALUATION OF PERFORMANCE                 
+                    targets, num_correct = [], 0    # produce prediction values using the model and determine the accuracy of these predictions
+                    preds = [list(prediction) for prediction in model.predict(np.array(eval_data))]
+                    
+                    for prediction in preds:
+                        target_index = self.family_mapping[curr_family].index(1)
+                        target = prediction[target_index]
+                        targets.append(target)
                         
                         if max(prediction) == target:
-                            num_correct += 1  
-                    targets.sort(reverse=True)   # targets are sorted in reverse order for the Fermi plot
+                            num_correct += 1
+                    targets.sort(reverse=True)
+                    fermi_data = [AAV/max(targets) for AAV in targets]
                     
-                    fermi_plot = (targets, '{}, {}/{} correct'.format(member, num_correct, eval_set_size), 'f')  # the fermi plot
-                    plot_list.append( fermi_plot ) 
-                     
-                    prediction_plots =  zip(preds, eval_titles, tuple('p' for i in preds))   # all the prediction plots
-                    for plot in prediction_plots:
-                        plot_list.append( plot )  
+                # PACKAGING OF ALL PLOTS, APART FROM THE SAMPLE SPECTRA
+                    loss_plot = (hist.history['loss'], 'Training Loss (Final = %0.2f)' % test_loss, 'm') 
+                    accuracy_plot = (hist.history['accuracy'], 'Training Accuracy (Final = %0.2f%%)' % (100 * test_acc), 'm') 
+                    fermi_plot = (fermi_data, '{}, {}/{} correct'.format(member, num_correct, eval_set_size), 'f')  
+                    summation_plot = ([self.average(column) for column in zip(*preds)], 'Standardized Summation', 'p')
+                    prediction_plots =  zip(preds, eval_titles, tuple('p' for i in preds))   # all the prediction plots                    
                     
-                    summation = [ sum(i)/len(preds) for i in map(list, zip(*preds)) ]    # the standardizaed summation
-                    plot_list.append( (summation, 'Standardized Summation', 'p') )  
+                    for plot in (loss_plot, accuracy_plot, fermi_plot, summation_plot, *prediction_plots): 
+                        plot_list.append( plot )    
 
-                    
+                # ORGANIZATION AND ADDITION OF RELEVANT DATA TO THE SUMMARY DICT
                     if point_range not in self.summaries:    # adding relevant data to the summary dict                                 
                         self.summaries[point_range] = ( [], {} )
                     fermi_data, score_data = self.summaries[point_range]
                     
                     fermi_data.append(fermi_plot)
-                    
-                    family = self.get_family(member)  # similar procedure occurs one nesting level lower to create a score dict by family
-                    if family not in score_data:
-                        score_data[family] = ( [], [] )
-                    names, scores = score_data[family]
+
+                    if curr_family not in score_data:
+                        score_data[curr_family] = ( [], [] )
+                    names, scores = score_data[curr_family]
                     names.append(member)
                     scores.append(num_correct/eval_set_size)
 
-                    
-                    self.train_window.set_status('Writing Results to Folders...')    # ccreating folders as necessary, writing results to folders
+                # CREATION OF FOLDERS, IF NECESSARY, AND PLOTS FOR THE CURRENT ROUND
+                    self.train_window.set_status('Writing Results to Folders...')    # creating folders as necessary, writing results to folders
                     dir_name = './Training Results, {}'.format(point_range)   
                     if not os.path.exists(dir_name):                                                           
                         os.makedirs(dir_name)
@@ -754,7 +758,7 @@ class PLATINUMS_App:
                         
                         scores.sort(reverse=True)   # arrange scores in ascending order
                         names.append('AVERAGE')
-                        scores.append(sum(scores)/len(scores))
+                        scores.append(self.average(scores))
                         
                         for name, score in zip(names, scores):
                             score_file.write('{} : {}\n'.format(name, score))
@@ -794,8 +798,9 @@ class PLATINUMS_App:
                 line_color = ('Loss' in plot_title and 'r' or 'g')
                 curr_plot.plot(range(1, self.num_epochs + 1), plot_data, line_color) 
             elif plot_type == 'f':               # for plotting fermi-dirac plots
-                curr_plot.plot( [i/len(plot_data) for i in range(len(plot_data))], plot_data, linestyle='-', color='m')  # normalized by dividing by length
-                curr_plot.axis( [0, 1, 0, 1] )
+                num_AAVs = len(plot_data)
+                curr_plot.plot( range(num_AAVs), plot_data, linestyle='-', color='m')  # normalized by dividing by length
+                curr_plot.axis( [0, num_AAVs, 0, 1.05] )
             elif plot_type == 'p':               # for plotting predictions
                 bar_color = ('Summation' in plot_title and 'r' or 'b')
                 curr_plot.bar( self.family_mapping.keys(), plot_data, color=bar_color)  
