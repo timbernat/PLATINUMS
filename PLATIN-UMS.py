@@ -5,10 +5,10 @@ from tkinter.ttk import Progressbar
 import csv, gc, math, os, re                 # general imports
 import numpy as np
 import matplotlib.pyplot as plt
-import matplotlib.backends.backend_tkagg
+#import matplotlib.backends.backend_tkagg
 #%matplotlib inline
 
-from time import time, sleep                       # single-function imports
+from time import time, strftime                      # single-function imports
 from datetime import timedelta
 from shutil import rmtree
 from random import shuffle
@@ -265,9 +265,9 @@ class TrainingWindow:
         self.slice_label = tk.Label(self.status_frame, text='Current Data Slice: ')
         self.curr_slice = tk.Label(self.status_frame)
         self.round_label = tk.Label(self.status_frame)
-        self.round_progress = Progressbar(self.status_frame, orient='horizontal', length=250, maximum=total_rounds)
+        self.round_progress = Progressbar(self.status_frame, orient='horizontal', length=240, maximum=total_rounds)
         self.epoch_label = tk.Label(self.status_frame)
-        self.epoch_progress = Progressbar(self.status_frame, orient='horizontal', length=250, maximum=num_epochs) 
+        self.epoch_progress = Progressbar(self.status_frame, orient='horizontal', length=240, maximum=num_epochs) 
         self.status_label = tk.Label(self.status_frame, text='Current Status: ')
         self.curr_status = tk.Label(self.status_frame)
         
@@ -402,7 +402,7 @@ class PLATINUMS_App:
         self.trim_switch = Switch(self.param_frame, 'RIP Trimming: ', row=2, col=1)
         
         self.upper_bound_entry = LabelledEntry(self.param_frame, 'Upper Bound:', tk.IntVar(), default=400, row=3, col=0)
-        self.slice_decrement_entry = LabelledEntry(self.param_frame, 'Slice Decrement:', tk.IntVar(), default=50, row=3, col=2)
+        self.slice_decrement_entry = LabelledEntry(self.param_frame, 'Slice Decrement:', tk.IntVar(), default=20, row=3, col=2)
         self.lower_bound_entry = LabelledEntry(self.param_frame, 'Lower Bound:', tk.IntVar(), default=50, row=4, col=0)
         self.n_slice_entry = LabelledEntry(self.param_frame, 'Number of Slices:', tk.IntVar(), default=1, row=4, col=2)
         self.confirm_training_params = ConfirmButton(self.param_frame, self.confirm_tparams, row=5, col=2, cs=2, sticky='e')
@@ -419,6 +419,7 @@ class PLATINUMS_App:
         self.train_window = None
         
         self.total_rounds = None
+        self.results_folder = None
         self.summaries = {}
 
         #General/Misc
@@ -549,7 +550,7 @@ class PLATINUMS_App:
         elif self.read_mode.get() == 'By Species':
             SelectionWindow(self.main, self.input_frame, '1000x210', self.all_species, self.selections, ncols=8)
         elif self.read_mode.get() == 'By Family':
-            SelectionWindow(self.main, self.input_frame, '260x90', self.families, self.selections, ncols=3)
+            SelectionWindow(self.main, self.input_frame, '270x85', self.families, self.selections, ncols=3)
 
     def confirm_inputs(self):
         '''Confirm species input selections'''
@@ -615,16 +616,22 @@ class PLATINUMS_App:
         '''The neural net training function itself'''
         start_time = time()    # log start of runtime
         num_spectra = 2
+        current_round = 0       
+        RIP_trimming, fam_training = self.trim_switch.value, self.fam_switch.value 
         
         for filename in os.listdir('.'):       # deletes results folders from prior trainings to prevent overwriting
             if re.search('\A(Training Results)', filename):
-                self.train_window.set_status('Deleting {}'.format(filename) )
                 rmtree('./%s'% filename, ignore_errors=True)
-        
-        current_round = 0       
-        RIP_trimming = self.trim_switch.value
-        fam_training = self.fam_switch.value 
-        
+        #self.results_folder = './Training Results'
+        self.results_folder = './Training Results, {}'.format(strftime('%m-%d-%y at %H;%M;%S'))   # maine results folder is named with time and date of training start
+        os.makedirs(self.results_folder)
+
+        with open('./{}/Training Settings.txt'.format(self.results_folder), 'a') as settings_file:  # make these variables more compact at some point
+            settings_file.write('Familiar Training? : {}\n'.format(fam_training))
+            settings_file.write('Number of Epochs : {}\n'.format(self.num_epochs))
+            settings_file.write('Batchsize : {}\n'.format(self.batchsize))
+            settings_file.write('Learn Rate : {}\n'.format(self.learnrate))
+                  
         for instance, member in enumerate(self.selections):
             for select_RIP in range(1 + int(RIP_trimming)):     # treats 0, 1 iteration as bool (optional true)
                 for segment in range(select_RIP and self.num_slices or 1): 
@@ -636,7 +643,7 @@ class PLATINUMS_App:
                                 
                     if select_RIP:
                         lower_bound, upper_bound = self.trimming_min, self.trimming_max - self.slice_decrement*segment
-                        point_range = 'points {}-{}'.format(lower_bound, upper_bound)
+                        point_range = 'Points {}-{}'.format(lower_bound, upper_bound)
                     else:
                         lower_bound, upper_bound =  0, self.spectrum_size
                         point_range = 'Full Spectra'
@@ -674,26 +681,25 @@ class PLATINUMS_App:
                     self.train_window.set_member( '{} ({} instances found)'.format(member, eval_set_size) )                      
                     x_train, x_test, y_train, y_test = train_test_split(np.array(features), np.array(labels), test_size=0.2)                     
 
-                # MODEL CREATION AND TRAINING
-                    with tf.device('CPU:0'):                            
-                        model = Sequential()                              # model block is created, layers are created/added in this block
-                        model.add(Dense(512, input_dim=(upper_bound - lower_bound), activation='relu'))  
-                        model.add(Dropout(0.5))                           # dropout layer, to reduce overfit
-                        model.add(Dense(512, activation='relu'))          # 512 neuron hidden layer
-                        #model.add(Dense(512, activation='relu'))         # 512 neuron hidden layer
-                        model.add(Dense(len(self.families), activation='softmax')) # softmax gives prob. dist. of identity over all families
-                        model.compile(loss='categorical_crossentropy', optimizer=Adam(lr=self.learnrate), metrics=['accuracy']) 
-                    
                     if verbosity:   # optional prinout, gives overview of the training data and the model settings
                         for (x, y, group) in ( (x_train, y_train, 'training'), (x_test, y_test, 'test') ):
                             print('{} features/labels in {} set ({} of the data)'.format(
                                   (x.shape[0], y.shape[0]), group, round(100 * x.shape[0]/train_set_size, 2)) )
                         print('\n{} features total. Of the {} species in training dataset:'.format(len(self.chem_data), train_set_size) )
                         for family in self.family_mapping.keys():
-                            print('    {}% of data are {}'.format( round(100 * occurrences[family]/train_set_size, 2), family) ) 
-                        model.summary()
+                            print('    {}% of data are {}'.format( round(100 * occurrences[family]/train_set_size, 2), family) )
+                  
+                # MODEL CREATION AND TRAINING
+                    with tf.device('CPU:0'):                            
+                        model = Sequential()                              # model block is created, layers are created/added in this block
+                        model.add(Dense(512, input_dim=(upper_bound - lower_bound), activation='relu'))  # 512 neuron input layer
+                        model.add(Dropout(0.5))                                    # dropout layer, to reduce overfit
+                        #model.add(Dense(512, activation='relu'))                  # 512 neuron hidden layer
+                        model.add(Dense(512, activation='relu'))                   # 512 neuron hidden layer
+                        model.add(Dense(len(self.families), activation='softmax')) # softmax gives prob. dist. of identity over all families
+                        model.compile(loss='categorical_crossentropy', optimizer=Adam(lr=self.learnrate), metrics=['accuracy']) 
+                    #model.summary()
                       
-                    # model training is invoked in the line below
                     hist = model.fit(x_train, y_train, epochs=self.num_epochs, batch_size=self.batchsize, callbacks=self.keras_callbacks, verbose=verbosity and 2 or 0)  
                     test_loss, test_acc = model.evaluate(x_test, y_test, verbose=(verbosity and 2 or 0))  # keras' self evaluation of loss and accuracy metrics
                     
@@ -741,33 +747,34 @@ class PLATINUMS_App:
 
                 # CREATION OF FOLDERS, IF NECESSARY, AND PLOTS FOR THE CURRENT ROUND
                     self.train_window.set_status('Writing Results to Folders...')    # creating folders as necessary, writing results to folders
-                    dir_name = './Training Results, {}'.format(point_range)   
+                    dir_name = './{}/{}'.format(self.results_folder, point_range)   
                     if not os.path.exists(dir_name):                                                           
                         os.makedirs(dir_name)
                     self.adagraph(plot_list, 6, lower_bound, upper_bound, '{}/{}.png'.format(dir_name, member))
                     gc.collect()    # collect any junk remaining in RAM
                     
-        self.train_window.set_status('Distributing Result Summaries...')
-        for point_range, (fermi_data, score_data) in self.summaries.items():  # distribution of summary data to the appropriate respective folders
-                self.adagraph(fermi_data, 5, None, None, './Training Results, {}/Fermi Summary.png'.format(point_range) )
+        self.train_window.set_status('Distributing Result Summaries...')   # distribution of summary data to the appropriate respective folders
+        for point_range, (fermi_data, score_data) in self.summaries.items(): 
+            curr_dir = './{}/{}/'.format(self.results_folder, point_range)
+            self.adagraph(fermi_data, 5, None, None, curr_dir + 'Fermi Summary.png')
                 
-                with open('./Training Results, {}/Scores.txt'.format(point_range), 'a') as score_file:
-                    for family, (names, scores) in score_data.items():
-                        family_header = '{}\n{}\n{}\n'.format('-'*20, family, '-'*20)
-                        score_file.write(family_header)    # an underlined heading for each family
-                        
-                        scores.sort(reverse=True)   # arrange scores in ascending order
-                        names.append('AVERAGE')
-                        scores.append(self.average(scores))
-                        
-                        for name, score in zip(names, scores):
-                            score_file.write('{} : {}\n'.format(name, score))
-                        score_file.write('\n')   # leave a gap between each family
+            with open(curr_dir + 'Scores.txt'.format(point_range), 'a') as score_file:
+                for family, (names, scores) in score_data.items():
+                    family_header = '{}\n{}\n{}\n'.format('-'*20, family, '-'*20)
+                    score_file.write(family_header)    # an underlined heading for each family
+
+                    scores.sort(reverse=True)   # arrange scores in ascending order
+                    names.append('AVERAGE')
+                    scores.append(self.average(scores))
+
+                    for name, score in zip(names, scores):
+                        score_file.write('{} : {}\n'.format(name, score))
+                    score_file.write('\n')   # leave a gap between each family
         
         self.train_window.button_frame.enable()
         self.train_window.set_status('Finished')
         runtime = timedelta(seconds=round(time() - start_time))   
-        messagebox.showinfo('Training Complete', 'Routine completed in {}\nResults can be found in "Training Results" folders'.format(runtime) )
+        messagebox.showinfo('Training Complete', 'Routine completed in {}\nResults can be found in "Training Results" folder'.format(runtime) )
     
     
     def reset_training(self):
