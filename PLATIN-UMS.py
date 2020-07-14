@@ -398,13 +398,13 @@ class PLATINUMS_App:
         self.stop_switch = Switch(self.param_frame, 'Early Stopping: ', row=1, col=1)
         self.trim_switch = Switch(self.param_frame, 'RIP Trimming: ', row=2, col=1)
         
-        self.n_slice_entry = LabelledEntry(self.param_frame, 'Number of Slices:', tk.IntVar(), default=1, row=3, col=0)
-        self.upper_bound_entry = LabelledEntry(self.param_frame, 'Upper Bound:', tk.IntVar(), default=400, row=3, col=2)
-        self.slice_decrement_entry = LabelledEntry(self.param_frame, 'Slice Decrement:', tk.IntVar(), default=50, row=4, col=0)
-        self.lower_bound_entry = LabelledEntry(self.param_frame, 'Lower Bound:', tk.IntVar(), default=50, row=4, col=2)
+        self.upper_bound_entry = LabelledEntry(self.param_frame, 'Upper Bound:', tk.IntVar(), default=400, row=3, col=0)
+        self.slice_decrement_entry = LabelledEntry(self.param_frame, 'Slice Decrement:', tk.IntVar(), default=50, row=3, col=2)
+        self.lower_bound_entry = LabelledEntry(self.param_frame, 'Lower Bound:', tk.IntVar(), default=50, row=4, col=0)
+        self.n_slice_entry = LabelledEntry(self.param_frame, 'Number of Slices:', tk.IntVar(), default=1, row=4, col=2)
         self.confirm_training_params = ConfirmButton(self.param_frame, self.confirm_tparams, row=5, col=2, cs=2, sticky='e')
 
-        self.trim_switch.dependents = (self.n_slice_entry, self.upper_bound_entry, self.slice_decrement_entry, self.lower_bound_entry)
+        self.trim_switch.dependents = (self.upper_bound_entry, self.slice_decrement_entry, self.lower_bound_entry, self.n_slice_entry)
         self.switches = (self.fam_switch, self.stop_switch, self.trim_switch)
         self.keras_callbacks = []
         
@@ -472,18 +472,20 @@ class PLATINUMS_App:
     
     def get_family(self, species):
         '''Takes the name of a species and returns the chemical family that that species belongs to, based on IUPAC naming conventions'''
-        iupac_suffices = {   'ane':'alkane',
-                            'ene':'alkene',
-                            'yne':'alkyne',
-                            'ic acid': 'carboxylic acid',
-                            #'ate':'ester',
-                            'ol':'alcohol',
-                            'ate':'acetate',
-                            'ether':'ether',
-                            'al':'aldehyde',
-                            'one':'ketone'  }                    
+        iupac_suffices = {  'ate':'Acetates',
+                            'ol':'Alcohols',
+                            'al':'Aldehydes',
+                            'ane':'Alkanes',
+                            'ene':'Alkenes',
+                            'yne':'Alkynes',
+                            'ine':'Amines',
+                            'oic acid': 'Carboxylic Acids',
+                            #'ate':'Esters',
+                            'ether':'Ethers',
+                            'one':'Ketones'  }                    
         for regex, family in iupac_suffices.items():
-            if re.search('(?i){}\Z'.format(regex), isolate_species(species) ):  # ignore capitalization (particular to ethers), only check end of name (particular to pinac<ol>one)
+            # ratioanle for regex: ignore capitalization (particular to ethers), only check end of name (particular to pinac<ol>one)
+            if re.search('(?i){}\Z'.format(regex), self.isolate_species(species) ):  
                 return family
             
     def get_vector(self, species):
@@ -621,22 +623,24 @@ class PLATINUMS_App:
         
         for instance, member in enumerate(self.selections):
             for select_RIP in range(1 + int(RIP_trimming)):     # treats 0, 1 iteration as bool (optional true)
-                for segment in range(select_RIP and self.num_slices or 1):   
+                for segment in range(select_RIP and self.num_slices or 1): 
+                # INITIALIZE SOME INFORMATION REGARDING THE CURRENT ROUND
                     self.train_window.set_status('Training...')
                     
                     current_round += 1
                     self.train_window.set_round_progress(current_round)
-                    
+                                
                     if select_RIP:
                         lower_bound, upper_bound = self.trimming_min, self.trimming_max - self.slice_decrement*segment
                         point_range = 'points {}-{}'.format(lower_bound, upper_bound)
                     else:
                         lower_bound, upper_bound =  0, self.spectrum_size
                         point_range = 'Full Spectra'
+                    self.train_window.set_slice(point_range) 
 
-                # DATA SELECTION AND ANALYSIS  
+                # EVALUATION AND TRAINING SET SELECTION AND SPLITTING 
+                    plot_list = []
                     eval_data, eval_titles = [], []
-                    plotting_data, plotting_titles = [], []
                     features, labels, occurrences = [], [], Counter()
                     train_set_size, eval_set_size = 0, 0
                                                
@@ -645,11 +649,10 @@ class PLATINUMS_App:
                         if re.search('\A{}.*'.format(member), species):       # if the current species begins with <member>
                             eval_set_size += 1
                             eval_data.append(data)
-                            eval_titles.append( (species, 'p') )
+                            eval_titles.append(species)
                                                         
                             if eval_set_size <= num_spectra:
-                                plotting_data.append( data )
-                                plotting_titles.append( (species, 's') )
+                                plot_list.append( (data, species, 's') )
                                 
                             if fam_training:
                                 train_set_size += 1
@@ -661,14 +664,8 @@ class PLATINUMS_App:
                             features.append(data)
                             labels.append(vector)
                             occurrences[self.get_family(species)] += 1
-                                               
-                    eval_titles.append( ('Standardized Summation', 'p') )
-                    self.train_window.set_member( '{} ({} instances found)'.format(member, eval_set_size) )
-                    self.train_window.set_slice(point_range)
-                                               
-                    x_train, x_test, y_train, y_test = train_test_split(np.array(features), np.array(labels), test_size=0.2)  
-                    train_feat_and_lab = (x_train.shape[0], y_train.shape[0])
-                    test_feat_and_lab = (x_test.shape[0], y_test.shape[0])
+                    self.train_window.set_member( '{} ({} instances found)'.format(member, eval_set_size) )                      
+                    x_train, x_test, y_train, y_test = train_test_split(np.array(features), np.array(labels), test_size=0.2)                     
 
                 # MODEL CREATION AND TRAINING
                     with tf.device('CPU:0'):                            
@@ -689,69 +686,85 @@ class PLATINUMS_App:
                             print('    {}% of data are {}s'.format( round(100 * occurrences[family]/train_set_size, 2), family) ) 
                         model.summary()
                       
-                    # model training is executed in the single line below
-                    hist = model.fit(x_train, y_train, epochs=self.num_epochs, batch_size=self.batchsize, callbacks=self.keras_callbacks, verbose=verbosity and 2 or 0)  
+                    hist = model.fit(x_train, y_train, epochs=self.num_epochs, batch_size=self.batchsize,   # model training is executed in the single line below
+                                     callbacks=self.keras_callbacks, verbose=verbosity and 2 or 0)  
                     
-                    if self.train_window.end_training:
+                    if self.train_window.end_training:  # condition to escape training loop of training is aborted
                         messagebox.showerror('Training has Stopped', 'Training aborted by user;\nProceed from Progress Window')
                         self.train_window.button_frame.enable()
                         return     # without this, aborting training only pauses one iteration of loop
 
-                # EVALUATION OF PERFORMANCE                  
-                    test_loss, test_acc = model.evaluate(x_test, y_test, verbose=(verbosity and 2 or 0))
-                    if verbosity:     # keras' self-evaluation, not the most reliable    
-                        print('\nTest loss: {} \nTest accuracy: {} \n'.format(test_loss, test_acc))
-                   
-                    plotting_data.extend( (hist.history['loss'], hist.history['accuracy']) )
-                    plotting_titles.extend( (('Training Loss (Final = %0.2f)' % test_loss, 'm'), ('Training Accuracy (Final = %0.2f%%)' % (100 * test_acc), 'm')) )
+                # EVALUATION OF PERFORMANCE, DISTRIBUTION OF FEEDBACK DATA                  
+                    test_loss, test_acc = model.evaluate(x_test, y_test, verbose=(verbosity and 2 or 0))  # keras' self evaluation of loss and accuracy
+                    plot_list.append( (hist.history['loss'], 'Training Loss (Final = %0.2f)' % test_loss, 'm') )
+                    plot_list.append( (hist.history['accuracy'], 'Training Accuracy (Final = %0.2f%%)' % (100 * test_acc), 'm') )
 
-                    # More intensive/accurate evaluation using the evaluation data we set aside for this species
-                    preds, targets, num_correct = [], [], 0          
+                    preds, targets, num_correct = [], [], 0       # evaluation of model predictions over the eval set
                     for prediction in list( model.predict( np.array(eval_data)) ):
-                        target_index = self.get_vector(member).index(1)   # the index of the actual identity of current member
-                        target = prediction[target_index]
+                        preds.append(prediction)
                         
-                        preds.append(prediction)  
-                        targets.append(target)                       
+                        target_index = self.get_vector(member).index(1)   # the index of the actual identity of current member
+                        target = prediction[target_index]  
+                        targets.append(target)  
+                        
                         if max(prediction) == target:
                             num_correct += 1  
-                    preds.append( [sum(i)/len(preds) for i in map(list, zip(*preds)) ])   # add summation of the predictions to the end of preds
                     targets.sort(reverse=True)   # targets are sorted in reverse order for the Fermi plot
-                    fermi_title = ('{}, {}/{} correct'.format(member, num_correct, eval_set_size),'f')
                     
-                    plotting_data.append( targets )
-                    plotting_titles.append( fermi_title )
+                    fermi_plot = (targets, '{}, {}/{} correct'.format(member, num_correct, eval_set_size), 'f')  # the fermi plot
+                    plot_list.append( fermi_plot ) 
+                     
+                    prediction_plots =  zip(preds, eval_titles, tuple('p' for i in preds))   # all the prediction plots
+                    for plot in prediction_plots:
+                        plot_list.append( plot )  
                     
-                    plotting_data.extend(preds)
-                    plotting_titles.extend(eval_titles)
+                    summation = [ sum(i)/len(preds) for i in map(list, zip(*preds)) ]    # the standardizaed summation
+                    plot_list.append( (summation, 'Standardized Summation', 'p') )  
 
-                    if point_range not in self.summaries:    # create a new entry if none exists for the current spectrum slice                                     
-                        self.summaries[point_range] = ( [], [], [] )
-                    fermi_data, names, scores = self.summaries[point_range]
-                    fermi_data.append(targets)
-                    names.append(fermi_title)   # add plot data, titles, and prediction scores to relevant sub-dict
-                    scores.append( (member, num_correct/eval_set_size) )
+                    
+                    if point_range not in self.summaries:    # adding relevant data to the summary dict                                 
+                        self.summaries[point_range] = ( [], {} )
+                    fermi_data, score_data = self.summaries[point_range]
+                    
+                    fermi_data.append(fermi_plot)
+                    
+                    family = self.get_family(member)  # similar procedure occurs one nesting level lower to create a score dict by family
+                    if family not in score_data:
+                        score_data[family] = ( [], [] )
+                    names, scores = score_data[family]
+                    names.append(member)
+                    scores.append(num_correct/eval_set_size)
 
-                    self.train_window.set_status('Writing Results to Folders...')    
+                    
+                    self.train_window.set_status('Writing Results to Folders...')    # ccreating folders as necessary, writing results to folders
                     dir_name = './Training Results, {}'.format(point_range)   
                     if not os.path.exists(dir_name):                                                           
                         os.makedirs(dir_name)
-
-                    self.adagraph(plotting_data, plotting_titles, 6, lower_bound, upper_bound, '{}/{}.png'.format(dir_name, member) )
+                    self.adagraph(plot_list, 6, lower_bound, upper_bound, '{}/{}.png'.format(dir_name, member))
                     gc.collect()    # collect any junk remaining in RAM
-
+                    
         self.train_window.set_status('Distributing Result Summaries...')
-        for point_range, (fermi_data, names, scores) in self.summaries.items():  # distribution of summary data to the appropriate respective folders
-                scores.sort(key=lambda pair : pair[1], reverse=True)     
+        for point_range, (fermi_data, score_data) in self.summaries.items():  # distribution of summary data to the appropriate respective folders
+                self.adagraph(fermi_data, 5, None, None, './Training Results, {}/Fermi Summary.png'.format(point_range) )
+                
                 with open('./Training Results, {}/Scores.txt'.format(point_range), 'a') as score_file:
-                    for (species, score) in scores:
-                        score_file.write('{} : {}\n'.format(species, score) )
-                self.adagraph(fermi_data, names, 5, None, None, './Training Results, {}/Fermi Summary.png'.format(point_range) )
+                    for family, (names, scores) in score_data.items():
+                        family_header = '{}\n{}\n{}\n'.format('-'*20, family, '-'*20)
+                        score_file.write(family_header)    # an underlined heading for each family
+                        
+                        scores.sort(reverse=True)   # arrange scores in ascending order
+                        names.append('AVERAGE')
+                        scores.append(sum(scores)/len(scores))
+                        
+                        for name, score in zip(names, scores):
+                            score_file.write('{} : {}\n'.format(name, score))
+                        score_file.write('\n')   # leave a gap between each family
         
         self.train_window.button_frame.enable()
         self.train_window.set_status('Finished')
         runtime = timedelta(seconds=round(time() - start_time))   
         messagebox.showinfo('Training Complete', 'Routine completed in {}\nResults can be found in "Training Results" folders'.format(runtime) )
+    
     
     def reset_training(self):
         if self.train_window: # if a window already exists
@@ -760,35 +773,34 @@ class PLATINUMS_App:
         self.summaries.clear()
         self.keras_callbacks.clear()
     
-    def adagraph(self, data_list, name_list, ncols, lower_bound, upper_bound, save_dir):  # ADD AXIS LABELS!
+    def adagraph(self, plot_list, ncols, lower_bound, upper_bound, save_dir):  # ADD AXIS LABELS!
         '''a general tidy internal graphing utility of my own devising, used to produce all manner of plots during training with one function'''
-        nrows = math.ceil(len(data_list)/ncols)  #  determine the necessary number of rows needed to accomodate the data
+        nrows = math.ceil(len(plot_list)/ncols)  #  determine the necessary number of rows needed to accomodate the data
         display_size = 20                        # 20 seems to be good size for jupyter viewing
-        
         fig, axs = plt.subplots(nrows, ncols, figsize=(display_size, display_size * nrows/ncols)) 
-        for idx, data in enumerate(data_list):                         
+        
+        for idx, (plot_data, plot_title, plot_type) in enumerate(plot_list):                         
             if nrows > 1:                        # locate the current plot, unpack linear index into coordinate
                 row, col = divmod(idx, ncols)      
                 curr_plot = axs[row][col]  
             else:                                # special case for indexing plots with only one row; my workaround of implementation in matplotlib
                 curr_plot = axs[idx]    
-                
-            plot_title, plot_type = name_list[idx]
             curr_plot.set_title(plot_title)
+            
             if plot_type == 's':                 # for plotting spectra
-                curr_plot.plot(range(lower_bound, upper_bound), data, 'k,') 
-                curr_plot.axis( [lower_bound , upper_bound+1, min(data), max(data)] )
-            elif plot_type == 'p':               # for plotting predictions
-                bar_color = ('Summation' in plot_title and 'r' or 'b')
-                curr_plot.bar( self.family_mapping.keys(), data, color=bar_color)  
-                curr_plot.set_ylim(0,1)
-                curr_plot.tick_params(axis='x', labelrotation=45)
+                curr_plot.plot(range(lower_bound, upper_bound), plot_data, 'k,') 
+                curr_plot.axis( [lower_bound , upper_bound+1, min(plot_data), max(plot_data)] )
             elif plot_type == 'm':               # for plotting metrics from training
                 line_color = ('Loss' in plot_title and 'r' or 'g')
-                curr_plot.plot(range(1, self.num_epochs + 1), data, line_color) 
+                curr_plot.plot(range(1, self.num_epochs + 1), plot_data, line_color) 
             elif plot_type == 'f':               # for plotting fermi-dirac plots
-                curr_plot.plot( [i/len(data) for i in range(len(data))], data, linestyle='-', color='m')  # normalized by dividing by length
+                curr_plot.plot( [i/len(plot_data) for i in range(len(plot_data))], plot_data, linestyle='-', color='m')  # normalized by dividing by length
                 curr_plot.axis( [0, 1, 0, 1] )
+            elif plot_type == 'p':               # for plotting predictions
+                bar_color = ('Summation' in plot_title and 'r' or 'b')
+                curr_plot.bar( self.family_mapping.keys(), plot_data, color=bar_color)  
+                curr_plot.set_ylim(0,1)
+                curr_plot.tick_params(axis='x', labelrotation=45)
         plt.tight_layout()
         plt.savefig(save_dir)
         plt.close('all')
