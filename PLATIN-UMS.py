@@ -622,8 +622,8 @@ class PLATINUMS_App:
         for filename in os.listdir('.'):       # deletes results folders from prior trainings to prevent overwriting
             if re.search('\A(Training Results)', filename):
                 rmtree('./%s'% filename, ignore_errors=True)
-        #self.results_folder = './Training Results'
-        self.results_folder = './Training Results, {}'.format(strftime('%m-%d-%y at %H;%M;%S'))   # maine results folder is named with time and date of training start
+        self.results_folder = './Training Results, {}-epoch{}familiar'.format(self.num_epochs, (fam_training and ' ' or ' un'))
+        #self.results_folder = './Training Results, {}'.format(strftime('%m-%d-%y at %H;%M;%S'))   # maine results folder is named with time and date of training start
         os.makedirs(self.results_folder)
 
         with open('./{}/Training Settings.txt'.format(self.results_folder), 'a') as settings_file:  # make these variables more compact at some point
@@ -763,9 +763,8 @@ class PLATINUMS_App:
                     family_header = '{}\n{}\n{}\n'.format('-'*20, family, '-'*20)
                     score_file.write(family_header)    # an underlined heading for each family
 
-                    names.append('AVERAGE')
-                    scores.append(self.average(scores))
                     processed_scores = sorted(zip(names, scores), key=lambda x : x[1], reverse=True)  # zip the scores together, then sort them in ascending order by score
+                    processed_scores.append( ('AVERAGE : ', self.average(scores)) )
 
                     for name, score in processed_scores:
                         score_file.write('{} : {}\n'.format(name, score))
