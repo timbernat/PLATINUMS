@@ -763,17 +763,20 @@ class PLATINUMS_App:
                     family_header = '{}\n{}\n{}\n'.format('-'*20, family, '-'*20)
                     score_file.write(family_header)    # an underlined heading for each family
 
-                    scores.sort(reverse=True)   # arrange scores in ascending order
                     names.append('AVERAGE')
                     scores.append(self.average(scores))
+                    processed_scores = sorted(zip(names, scores), key=lambda x : x[1], reverse=True)  # zip the scores together, then sort them in ascending order by score
 
-                    for name, score in zip(names, scores):
+                    for name, score in processed_scores:
                         score_file.write('{} : {}\n'.format(name, score))
                     score_file.write('\n')   # leave a gap between each family
         
         self.train_window.button_frame.enable()
         self.train_window.set_status('Finished')
+        
         runtime = timedelta(seconds=round(time() - start_time))   
+        with open('./{}/Training Settings.txt'.format(self.results_folder), 'a') as settings_file:
+            settings_file.write('\nTraining Time : {}'.format(runtime))
         messagebox.showinfo('Training Complete', 'Routine completed in {}\nResults can be found in "Training Results" folder'.format(runtime) )
     
     
