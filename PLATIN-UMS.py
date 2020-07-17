@@ -339,7 +339,7 @@ class PLATINUMS_App:
     def __init__(self, main):
         #Main Window
         self.main = main
-        self.main.title('PLATIN-UMS 4.2.1-alpha')
+        self.main.title('PLATIN-UMS 4.2.2-alpha')
         self.main.geometry('445x420')
         self.preds = None
 
@@ -396,10 +396,14 @@ class PLATINUMS_App:
         self.slice_decrement = None
         self.num_slices = None
         
-        self.param_frame = ToggleFrame(self.main, 'Set Training Parameters: ', padx=9, pady=5, row=3)
+        self.param_frame = ToggleFrame(self.main, 'Set Training Parameters: ', padx=9, pady=5, row=3) 
         self.fam_switch = Switch(self.param_frame, 'Familiar Training :', row=0, col=1)
         self.stop_switch = Switch(self.param_frame, 'Early Stopping: ', row=1, col=1)
         self.trim_switch = Switch(self.param_frame, 'RIP Trimming: ', row=2, col=1)
+
+        self.cycle_fams = tk.IntVar()
+        self.cycle_button = tk.Checkbutton(self.param_frame, text='Cycle', variable=self.cycle_fams)
+        self.cycle_button.grid(row=0, column=3)
         
         self.upper_bound_entry = LabelledEntry(self.param_frame, 'Upper Bound:', tk.IntVar(), default=400, row=3, col=0)
         self.slice_decrement_entry = LabelledEntry(self.param_frame, 'Slice Decrement:', tk.IntVar(), default=20, row=3, col=2)
@@ -410,7 +414,6 @@ class PLATINUMS_App:
         self.trim_switch.dependents = (self.upper_bound_entry, self.slice_decrement_entry, self.lower_bound_entry, self.n_slice_entry)
         self.switches = (self.fam_switch, self.stop_switch, self.trim_switch)
         self.keras_callbacks = []
-        
         self.param_frame.disable()
     
         #Training Buttons and values
@@ -457,6 +460,7 @@ class PLATINUMS_App:
         self.train_button.configure(state='disabled')
         self.chosen_file.set('--Choose a CSV--')
         self.read_mode.set(None)
+        self.cycle_fams.set(0)
         
         for datum in (self.chem_data, self.selections, self.family_mapping):
             datum.clear()
@@ -606,11 +610,15 @@ class PLATINUMS_App:
         if self.trim_switch.value:  #if RIP trimming is enabled
             self.total_rounds += len(self.selections)*self.num_slices
 
-        self.reset_training()
-        self.train_button.configure(state='disabled')
-        self.train_window = TrainingWindow(self.main, self.total_rounds, self.num_epochs, self.begin_training, self.reset, self.train_button)
-        self.keras_callbacks.append( TkEpochs(self.train_window) )
-        self.training()
+        for familiar_cycling in range(1 + self.cycle_fams.get()):  # similar to RIP trimming True/False loop, enables cycling thru both fams and unfams
+            if familiar_cycling:
+                self.fam_switch.toggle()
+            self.reset_training()
+            self.train_button.configure(state='disabled')
+            self.train_window = TrainingWindow(self.main, self.total_rounds, self.num_epochs, self.begin_training, self.reset, self.train_button)
+            self.keras_callbacks.append( TkEpochs(self.train_window) )
+            self.training()
+        messagebox.showinfo('Training Complete', 'Routine completed successfully\nResults can be found in "Training Results" folders')
                 
     def training(self, verbosity=False):
         '''The neural net training function itself'''
@@ -622,7 +630,7 @@ class PLATINUMS_App:
         for filename in os.listdir('.'):       # deletes results folders from prior trainings to prevent overwriting
             if re.search('\A(Training Results)', filename):
                 rmtree('./%s'% filename, ignore_errors=True)
-        self.results_folder = './Training Results, {}-epoch{}familiar'.format(self.num_epochs, (fam_training and ' ' or ' un'))
+        self.results_folder = './Saved Training Results/All Spectra/Training Results, {}-epoch{}familiar'.format(self.num_epochs, (fam_training and ' ' or ' un'))
         #self.results_folder = './Training Results, {}'.format(strftime('%m-%d-%y at %H;%M;%S'))   # maine results folder is named with time and date of training start
         os.makedirs(self.results_folder)
 
@@ -776,7 +784,6 @@ class PLATINUMS_App:
         runtime = timedelta(seconds=round(time() - start_time))   
         with open('./{}/Training Settings.txt'.format(self.results_folder), 'a') as settings_file:
             settings_file.write('\nTraining Time : {}'.format(runtime))
-        messagebox.showinfo('Training Complete', 'Routine completed in {}\nResults can be found in "Training Results" folder'.format(runtime) )
     
     
     def reset_training(self):
