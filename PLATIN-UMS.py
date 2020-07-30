@@ -10,6 +10,7 @@ import matplotlib.pyplot as plt
 
 from time import time, strftime                      # single-function imports
 from datetime import timedelta
+from pathlib import Path
 from shutil import rmtree
 from random import shuffle
 from collections import Counter
@@ -23,23 +24,35 @@ from tensorflow.keras.callbacks import EarlyStopping, Callback
 from sklearn.model_selection import train_test_split
 
 
-# SECTION 2 : some custom widget classes to make building and managing the GUI easier on myself ---------------------------------------------------
-class Dyn_OptionMenu:
+# SECTION 1 : some custom widget classes to make building and managing the GUI easier on myself ---------------------------------------------------           
+class DynOptionMenu:
     '''My addon to the TKinter OptionMenu, adds methods to conveniently update menu contents'''
-    def __init__(self, frame, var, options, width=10, row=0, col=0, colspan=1):
-        self.options = options
-        self.menu = tk.OptionMenu(frame, var, *self.options)
+    def __init__(self, frame, var, option_method, default=None, width=10, row=0, col=0, colspan=1):
+        self.option_method = option_method
+        self.default=default
+        self.menu = tk.OptionMenu(frame, var, (None,) )
         self.menu.configure(width=width)
         self.menu.grid(row=row, column=col, columnspan=colspan)
         
         self.var = var
         self.contents = self.menu.children['menu']
+        self.update()
+        
+    def enable(self):
+        self.menu.configure(state='normal')
+        
+    def disable(self):
+        self.menu.configure(state='disabled')
     
-    def update_menu(self):
+    def reset_default(self):
+        self.var.set(self.default)
+    
+    def update(self):
         self.contents.delete(0, 'end')
-        for option in self.options:
+        for option in self.option_method():
             self.contents.add_command(label=option, command=lambda x=option: self.var.set(x))
-
+        self.reset_default()
+            
             
 class ToggleFrame(tk.LabelFrame):
     '''A frame whose contents can be easily disabled or enabled, If starting disabled, must put "self.disable()"
@@ -334,7 +347,7 @@ class TrainingWindow:
         self.train_button.configure(state='normal')
         self.training_window.destroy()
         
-# Start of actual GUI app class code ------------------------------------------------------------------------------------------------------------
+# Section 2: Start of actual GUI app class code ------------------------------------------------------------------------------------------------------------
 class PLATINUMS_App:
     def __init__(self, main):
         #Main Window
@@ -346,23 +359,20 @@ class PLATINUMS_App:
         #Frame 1
         self.data_frame = ToggleFrame(self.main, 'Select CSV to Read: ', padx=21, pady=5, row=0)
         self.chosen_file = tk.StringVar()
-        self.chosen_file.set('--Choose a CSV--')
         self.chem_data = {}
         self.all_species = set()
         self.families = set()
         self.family_mapping = {}
         self.spectrum_size = None
         
-        self.csv_menu = Dyn_OptionMenu(self.data_frame, self.chosen_file, (None,) , width=28, colspan=2)
+        self.csv_menu = DynOptionMenu(self.data_frame, self.chosen_file, self.get_csvs, default='--Choose a CSV--', width=28, colspan=2)
         self.read_label = tk.Label(self.data_frame, text='Read Status:')
         self.read_status = StatusBox(self.data_frame, on_message='CSV Read!', off_message='No File Read', row=1, col=1)
-        self.refresh_button = tk.Button(self.data_frame, text='Refresh CSVs', command=self.update_csvs, padx=15)
+        self.refresh_button = tk.Button(self.data_frame, text='Refresh CSVs', command=self.csv_menu.update, padx=15)
         self.confirm_data = ConfirmButton(self.data_frame, self.import_data, padx=2, row=1, col=2)
         
         self.refresh_button.grid(row=0, column=2)
         self.read_label.grid(row=1, column=0)
-        
-        self.update_csvs() # populate csv menu for the first time
         
         #Frame 2
         self.input_frame = ToggleFrame(self.main, 'Select Input Mode: ', padx=5, pady=5, row=1)
@@ -373,7 +383,8 @@ class PLATINUMS_App:
         
         self.mode_buttons = [tk.Radiobutton(self.input_frame, text=mode, value=mode, var=self.read_mode, command=self.further_sel) 
                              for mode in ('Select All', 'By Family', 'By Species') ]
-        for i in range(3):
+        for i, mode in enumerate( ('Select All', 'By Family', 'By Species') ):
+            tk.Radiobutton(self.input_frame, text=mode, value=mode, var=self.read_mode, command=self.further_sel)
             self.mode_buttons[i].grid(row=0, column=i)
         self.confirm_sels = ConfirmButton(self.input_frame, self.confirm_inputs, row=0, col=3, sticky='e')
         self.input_frame.disable()
@@ -458,7 +469,7 @@ class PLATINUMS_App:
         
         self.read_status.set_status(False)
         self.train_button.configure(state='disabled')
-        self.chosen_file.set('--Choose a CSV--')
+        self.csv_menu.reset_default()
         self.read_mode.set(None)
         self.cycle_fams.set(0)
         
@@ -475,6 +486,13 @@ class PLATINUMS_App:
     def average(self, iterable):
         '''Caculcate and return average of an iterable'''
         return sum(iterable)/len(iterable)
+    
+    def get_csvs(self):
+        '''Update the CSV dropdown selection to catch any changes in the files present'''
+        csvs_present = tuple(file for file in os.listdir() if re.search('.csv\Z', file))
+        if csvs_present == ():
+            csvs_present = (None,)
+        return csvs_present
 
                 
     #Frame 1 (Reading) Methods 
@@ -497,14 +515,13 @@ class PLATINUMS_App:
                             'one':'Ketones'  }                    
         for regex, family in iupac_suffices.items():
             # ratioanle for regex: ignore capitalization (particular to ethers), only check end of name (particular to pinac<ol>one)
-            if re.search('(?i){}\Z'.format(regex), self.isolate_species(species) ):  
+            if re.search('(?i){}\Z'.format(regex), self.isolate_species(species)):  
                 return family
     
     def read_chem_data(self): 
         '''Used to read and format the data from the csv provided into a form usable by the training program
         Returns the read data (with vector) and sorted lists of the species and families found in the data'''
-        csv_name = './{}.csv'.format( self.chosen_file.get() )
-        with open(csv_name, 'r') as file:
+        with open(self.chosen_file.get(), 'r') as file:
             for row in csv.reader(file):
                 name = row[0]
                 spectrum_data = [float(i) for i in row[1:]]  # convert data point from str to floats
@@ -523,17 +540,8 @@ class PLATINUMS_App:
             self.family_mapping[family] = one_hot_vector
                                    
         for species, data in self.chem_data.items():  # add mapping vector to all data entries
-            vector = self.family_mapping[ self.get_family(species) ]
+            vector = self.family_mapping[self.get_family(species)]
             self.chem_data[species] = (data, vector)
-    
-    def update_csvs(self):
-        '''Update the CSV dropdown selection to catch any changes in the files present'''
-        csvs_present = tuple(i[:-4] for i in os.listdir('.') if re.search('.csv\Z', i))
-        if csvs_present == ():
-            csvs_present = (None,)
-        
-        self.csv_menu.options = csvs_present
-        self.csv_menu.update_menu()
     
     def import_data(self):
         '''Read in data based on the selected data file'''
@@ -580,7 +588,7 @@ class PLATINUMS_App:
     def confirm_tparams(self):
         '''Confirm training parameter selections, perform pre-training error checks if necessary'''
         if self.stop_switch.value:
-            self.keras_callbacks.append( EarlyStopping(monitor='loss', mode='min', verbose=1, patience=8) )
+            self.keras_callbacks.append(EarlyStopping(monitor='loss', mode='min', verbose=1, patience=8))  # optimize patience, eventually
         
         if not self.trim_switch.value: # if RIP trimming is not selected
             self.param_frame.disable()
@@ -616,25 +624,29 @@ class PLATINUMS_App:
             self.reset_training()
             self.train_button.configure(state='disabled')
             self.train_window = TrainingWindow(self.main, self.total_rounds, self.num_epochs, self.begin_training, self.reset, self.train_button)
-            self.keras_callbacks.append( TkEpochs(self.train_window) )
+            self.keras_callbacks.append(TkEpochs(self.train_window))
             self.training()
-        messagebox.showinfo('Training Complete', 'Routine completed successfully\nResults can be found in "Training Results" folders')
-                
+     
+    # Section 2A: the training routine code itself 
     def training(self, verbosity=False):
         '''The neural net training function itself'''
         start_time = time()    # log start of runtime
         num_spectra = 2
         current_round = 0       
         RIP_trimming, fam_training = self.trim_switch.value, self.fam_switch.value 
+                           
+        folder_name = 'Training Results, {}-epoch{}familiar'.format(self.num_epochs, (fam_training and ' ' or ' un'))
+        self.results_folder = Path('Saved Training Results', 'All Spectra', folder_name)
         
-        for filename in os.listdir('.'):       # deletes results folders from prior trainings to prevent overwriting
-            if re.search('\A(Training Results)', filename):
-                rmtree('./%s'% filename, ignore_errors=True)
-        self.results_folder = './Saved Training Results/All Spectra/Training Results, {}-epoch{}familiar'.format(self.num_epochs, (fam_training and ' ' or ' un'))
-        #self.results_folder = './Training Results, {}'.format(strftime('%m-%d-%y at %H;%M;%S'))   # maine results folder is named with time and date of training start
+        if os.path.exists(self.results_folder):   # prompt user to overwrite file if one already exists
+            if messagebox.askyesno('Duplicates Found', 'Folder with same data settings found\nOverwrite old folder?'):
+                rmtree(self.results_folder, ignore_errors=True)
+            else:
+                self.reset_training()
+                return  #terminate prematurely if overwrite permission is not given
         os.makedirs(self.results_folder)
 
-        with open('./{}/Training Settings.txt'.format(self.results_folder), 'a') as settings_file:  # make these variables more compact at some point
+        with open(self.results_folder/'Training Settings.txt', 'a') as settings_file:  # make these variables more compact at some point
             settings_file.write('Familiar Training? : {}\n'.format(fam_training))
             settings_file.write('Number of Epochs : {}\n'.format(self.num_epochs))
             settings_file.write('Batchsize : {}\n'.format(self.batchsize))
@@ -645,6 +657,7 @@ class PLATINUMS_App:
                 for segment in range(select_RIP and self.num_slices or 1): 
                 # INITIALIZE SOME INFORMATION REGARDING THE CURRENT ROUND
                     self.train_window.set_status('Training...')
+                    curr_family = self.get_family(member)
                     
                     current_round += 1
                     self.train_window.set_round_progress(current_round)
@@ -655,9 +668,7 @@ class PLATINUMS_App:
                     else:
                         lower_bound, upper_bound =  0, self.spectrum_size
                         point_range = 'Full Spectra'
-                    self.train_window.set_slice(point_range) 
-                    
-                    curr_family = self.get_family(member)
+                    self.train_window.set_slice(point_range)                 
 
                 # EVALUATION AND TRAINING SET SELECTION AND SPLITTING 
                     plot_list = []
@@ -738,7 +749,7 @@ class PLATINUMS_App:
                     prediction_plots =  zip(preds, eval_titles, tuple('p' for i in preds))   # all the prediction plots                    
                     
                     for plot in (loss_plot, accuracy_plot, fermi_plot, summation_plot, *prediction_plots): 
-                        plot_list.append( plot )    
+                        plot_list.append(plot)    
 
                 # ORGANIZATION AND ADDITION OF RELEVANT DATA TO THE SUMMARY DICT
                     if point_range not in self.summaries:    # adding relevant data to the summary dict                                 
@@ -755,18 +766,18 @@ class PLATINUMS_App:
 
                 # CREATION OF FOLDERS, IF NECESSARY, AND PLOTS FOR THE CURRENT ROUND
                     self.train_window.set_status('Writing Results to Folders...')    # creating folders as necessary, writing results to folders
-                    dir_name = './{}/{}'.format(self.results_folder, point_range)   
-                    if not os.path.exists(dir_name):                                                           
-                        os.makedirs(dir_name)
-                    self.adagraph(plot_list, 6, lower_bound, upper_bound, '{}/{}.png'.format(dir_name, member))
+                    curr_dir = self.results_folder/point_range    
+                    if not os.path.exists(curr_dir):                                                           
+                        os.makedirs(curr_dir)
+                    self.adagraph(plot_list, 6, lower_bound, upper_bound, curr_dir/member)
                     gc.collect()    # collect any junk remaining in RAM
                     
         self.train_window.set_status('Distributing Result Summaries...')   # distribution of summary data to the appropriate respective folders
         for point_range, (fermi_data, score_data) in self.summaries.items(): 
-            curr_dir = './{}/{}/'.format(self.results_folder, point_range)
-            self.adagraph(fermi_data, 5, None, None, curr_dir + 'Fermi Summary.png')
+            curr_dir = self.results_folder/point_range
+            self.adagraph(fermi_data, 5, None, None, curr_dir/'Fermi Summary.png')
                 
-            with open(curr_dir + 'Scores.txt'.format(point_range), 'a') as score_file:
+            with open(curr_dir/'Scores.txt', 'a') as score_file:
                 for family, (names, scores) in score_data.items():
                     family_header = '{}\n{}\n{}\n'.format('-'*20, family, '-'*20)
                     score_file.write(family_header)    # an underlined heading for each family
@@ -782,8 +793,9 @@ class PLATINUMS_App:
         self.train_window.set_status('Finished')
         
         runtime = timedelta(seconds=round(time() - start_time))   
-        with open('./{}/Training Settings.txt'.format(self.results_folder), 'a') as settings_file:
+        with open(self.results_folder/'Training Settings.txt', 'a') as settings_file:
             settings_file.write('\nTraining Time : {}'.format(runtime))
+        messagebox.showinfo('Training Complete', 'Routine completed successfully\nResults can be found in "Training Results" folders')
     
     
     def reset_training(self):
