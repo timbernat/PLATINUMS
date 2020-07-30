@@ -266,17 +266,19 @@ class TrainingWindow:
         self.train_button = train_button
         self.training_window = tk.Toplevel(main)
         self.training_window.title('Training Progress')
-        self.training_window.geometry('390x142')
+        self.training_window.geometry('398x163')
         self.end_training = False
         
         # Status Printouts
-        self.status_frame = tk.Frame(self.training_window, bd=2, padx=11, relief='groove')
+        self.status_frame = tk.Frame(self.training_window, bd=2, padx=13, relief='groove')
         self.status_frame.grid(row=0, column=0)
         
         self.member_label = tk.Label(self.status_frame, text='Current Species: ')
         self.curr_member = tk.Label(self.status_frame)
         self.slice_label = tk.Label(self.status_frame, text='Current Data Slice: ')
         self.curr_slice = tk.Label(self.status_frame)
+        self.fam_label = tk.Label(self.status_frame, text='Training Type: ')
+        self.curr_fam = tk.Label(self.status_frame)
         self.round_label = tk.Label(self.status_frame)
         self.round_progress = Progressbar(self.status_frame, orient='horizontal', length=240, maximum=total_rounds)
         self.epoch_label = tk.Label(self.status_frame)
@@ -288,12 +290,14 @@ class TrainingWindow:
         self.curr_member.grid(   row=0, column=1, sticky='w')
         self.slice_label.grid(   row=1, column=0)
         self.curr_slice.grid(    row=1, column=1, sticky='w')
-        self.round_label.grid(   row=2, column=0)
-        self.round_progress.grid(row=2, column=1, sticky='w')
-        self.epoch_label.grid(   row=3, column=0)
-        self.epoch_progress.grid(row=3, column=1, sticky='w')
-        self.status_label.grid(  row=4, column=0)
-        self.curr_status.grid(   row=4, column=1, sticky='w')
+        self.fam_label.grid(     row=2, column=0)
+        self.curr_fam.grid(      row=2, column=1, sticky='w')
+        self.round_label.grid(   row=3, column=0)
+        self.round_progress.grid(row=3, column=1, sticky='w')
+        self.epoch_label.grid(   row=4, column=0)
+        self.epoch_progress.grid(row=4, column=1, sticky='w')
+        self.status_label.grid(  row=5, column=0)
+        self.curr_status.grid(   row=5, column=1, sticky='w')
         
         self.reset()
     
@@ -317,21 +321,27 @@ class TrainingWindow:
     def reset(self):
         self.set_member('---')
         self.set_slice('---')
+        self.set_familiar_status('---')
         self.set_round_progress(0)
         self.set_epoch_progress(0)
         self.set_status('Standby')
     
-    def set_member(self, member):
-        self.curr_member.configure(text=member)
+    def set_readout(self, readout, value):
+        '''Base method for updating a readout on the menu'''
+        readout.configure(text=value)
         self.main.update()
+    
+    def set_member(self, member):
+        self.set_readout(self.curr_member, member)
     
     def set_slice(self, data_slice):
-        self.curr_slice.configure(text=data_slice)
-        self.main.update()
+        self.set_readout(self.curr_slice, data_slice)
     
     def set_status(self, status):
-        self.curr_status.configure(text=status)
-        self.main.update()
+        self.set_readout(self.curr_status, status)
+        
+    def set_familiar_status(self, fam_status):
+        self.set_readout(self.curr_fam, fam_status)
     
     def set_round_progress(self, curr_round):
         self.round_label.configure(text='Training Round: {}/{}'.format(curr_round, self.total_rounds) )
@@ -354,7 +364,6 @@ class PLATINUMS_App:
         self.main = main
         self.main.title('PLATIN-UMS 4.2.2-alpha')
         self.main.geometry('445x420')
-        self.preds = None
 
         #Frame 1
         self.data_frame = ToggleFrame(self.main, 'Select CSV to Read: ', padx=21, pady=5, row=0)
@@ -379,7 +388,6 @@ class PLATINUMS_App:
         self.read_mode = tk.StringVar()
         self.read_mode.set(None)
         self.selections = []
-        self.choices = None
         
         self.mode_buttons = [tk.Radiobutton(self.input_frame, text=mode, value=mode, var=self.read_mode, command=self.further_sel) 
                              for mode in ('Select All', 'By Family', 'By Species') ]
@@ -431,21 +439,18 @@ class PLATINUMS_App:
         self.train_button = tk.Button(self.main, text='TRAIN', padx=20, width=45, bg='dodger blue', state='disabled', command=self.begin_training)
         self.train_button.grid(row=4, column=0)
         self.train_window = None
-        
-        self.total_rounds = None
-        self.results_folder = None
         self.summaries = {}
 
         #General/Misc
         self.frames = (self.data_frame, self.input_frame, self.hyper_frame, self.param_frame)
-        self.entries = (self.epoch_entry, self.batchsize_entry, self.learnrate_entry, self.n_slice_entry,
-                        self.upper_bound_entry, self.slice_decrement_entry, self.lower_bound_entry)
+        self.entries = (self.epoch_entry, self.batchsize_entry, self.learnrate_entry, self.n_slice_entry, self.upper_bound_entry, self.slice_decrement_entry, self.lower_bound_entry)
+        self.arrays = (self.chem_data, self.selections, self.family_mapping)
 
         self.exit_button = tk.Button(self.main, text='Exit', padx=22, pady=22, bg='red', command=self.shutdown)
         self.reset_button = tk.Button(self.main, text='Reset', padx=20, bg='orange', command=self.reset)
         self.exit_button.grid(row=0, column=4)
         self.reset_button.grid(row=4, column=4)
-        
+
     
     #General Methods
     def isolate(self, on_frame):
@@ -464,8 +469,6 @@ class PLATINUMS_App:
     def reset(self):
         '''reset the GUI to the opening state, along with all variables'''
         self.isolate(self.data_frame)
-        for switch in self.switches:
-            switch.disable()
         
         self.read_status.set_status(False)
         self.train_button.configure(state='disabled')
@@ -473,15 +476,18 @@ class PLATINUMS_App:
         self.read_mode.set(None)
         self.cycle_fams.set(0)
         
-        for datum in (self.chem_data, self.selections, self.family_mapping):
-            datum.clear()
-        self.all_species = set()
-        self.families = set()
+        for switch in self.switches:
+            switch.disable()
         
         for entry in self.entries:
             entry.reset_default()
         
-        self.reset_training()
+        for array in self.arrays:
+            array.clear()
+        self.all_species = set()
+        self.families = set()
+        
+        self.reset_training()  # keras callbacks and summaries, while not in self.arrays, are cleared by this call
         
     def average(self, iterable):
         '''Caculcate and return average of an iterable'''
@@ -496,12 +502,13 @@ class PLATINUMS_App:
 
                 
     #Frame 1 (Reading) Methods 
-    def isolate_species(self, species):
-        '''Strips extra numbers off the end of the name of a species in a csv and just tells you the species name'''
-        return re.sub('(\s|-)\d+\s*\Z', '', species)  # regex to crop off terminal digits ofin a variety of possible 
+    def isolate_species(self, instance):
+        '''Strips extra numbers off the end of the name of an instance in a csv and just tells you its species'''
+        return re.sub('(\s|-)\d+\s*\Z', '', instance)  # regex to crop off terminal digits ofin a variety of possible 
     
     def get_family(self, species):
-        '''Takes the name of a species and returns the chemical family that that species belongs to, based on IUPAC naming conventions'''
+        '''Takes the name of a species OR of an instance and returns the chemical family that that species belongs to;
+        determination is based on IUPAC naming conventions by suffix'''
         iupac_suffices = {  'ate':'Acetates',
                             'ol':'Alcohols',
                             'al':'Aldehydes',
@@ -523,12 +530,12 @@ class PLATINUMS_App:
         Returns the read data (with vector) and sorted lists of the species and families found in the data'''
         with open(self.chosen_file.get(), 'r') as file:
             for row in csv.reader(file):
-                name = row[0]
+                instance = row[0]
                 spectrum_data = [float(i) for i in row[1:]]  # convert data point from str to floats
                 
-                self.chem_data[name] = spectrum_data
-                self.all_species.add( self.isolate_species(name) )
-                self.families.add( self.get_family(name) )
+                self.chem_data[instance] = spectrum_data
+                self.all_species.add( self.isolate_species(instance) )
+                self.families.add( self.get_family(instance) )
                 if not self.spectrum_size:
                     self.spectrum_size = len(spectrum_data)
 
@@ -539,9 +546,9 @@ class PLATINUMS_App:
             one_hot_vector = tuple(i == index and 1 or 0 for i in range(len(self.families)) )
             self.family_mapping[family] = one_hot_vector
                                    
-        for species, data in self.chem_data.items():  # add mapping vector to all data entries
-            vector = self.family_mapping[self.get_family(species)]
-            self.chem_data[species] = (data, vector)
+        for instance, data in self.chem_data.items():  # add mapping vector to all data entries
+            vector = self.family_mapping[self.get_family(instance)]
+            self.chem_data[instance] = (data, vector)
     
     def import_data(self):
         '''Read in data based on the selected data file'''
@@ -570,7 +577,8 @@ class PLATINUMS_App:
             messagebox.showerror('No selections made', 'Please select species to evaluate')
         else:
             if self.read_mode.get() == 'By Family':
-                self.selections = [species for family in self.selections for species in self.all_species if self.get_family(species) == family]
+                #self.selections = [species for family in self.selections for species in self.all_species if self.get_family(species) == family]
+                self.selections = [species for species in self.all_species if self.get_family(species) in self.selections]
             self.isolate(self.hyper_frame)
 
     
@@ -614,40 +622,43 @@ class PLATINUMS_App:
         
     #Training and Neural Net-Specific Methods    
     def begin_training(self):
-        self.total_rounds = len(self.selections)
+        total_rounds = len(self.selections)
         if self.trim_switch.value:  #if RIP trimming is enabled
-            self.total_rounds += len(self.selections)*self.num_slices
+            total_rounds += len(self.selections)*self.num_slices
 
         for familiar_cycling in range(1 + self.cycle_fams.get()):  # similar to RIP trimming True/False loop, enables cycling thru both fams and unfams
             if familiar_cycling:
                 self.fam_switch.toggle()
             self.reset_training()
             self.train_button.configure(state='disabled')
-            self.train_window = TrainingWindow(self.main, self.total_rounds, self.num_epochs, self.begin_training, self.reset, self.train_button)
+            self.train_window = TrainingWindow(self.main, total_rounds, self.num_epochs, self.begin_training, self.reset, self.train_button)
             self.keras_callbacks.append(TkEpochs(self.train_window))
-            self.training()
+            
+            end_notification = (self.cycle_fams.get() == familiar_cycling)  # wont show end notification (and pause training) if not on last cycle
+            self.training(end_notification=end_notification)
      
     # Section 2A: the training routine code itself 
-    def training(self, verbosity=False):
+    def training(self, end_notification=True, verbosity=False):
         '''The neural net training function itself'''
         start_time = time()    # log start of runtime
-        num_spectra = 2
+        num_spectra = 2        # number of sample spectra to include
         current_round = 0       
         RIP_trimming, fam_training = self.trim_switch.value, self.fam_switch.value 
-                           
-        folder_name = 'Training Results, {}-epoch{}familiar'.format(self.num_epochs, (fam_training and ' ' or ' un'))
-        self.results_folder = Path('Saved Training Results', 'All Spectra', folder_name)
         
-        if os.path.exists(self.results_folder):   # prompt user to overwrite file if one already exists
-            if messagebox.askyesno('Duplicates Found', 'Folder with same data settings found\nOverwrite old folder?'):
-                rmtree(self.results_folder, ignore_errors=True)
+        familiar_str = '{}amiliar'.format(fam_training and 'F' or 'Unf')  # some str formatting based on whether the current training type is familiar or unfamiliar
+        self.train_window.set_familiar_status(familiar_str)
+        results_folder = Path('Saved Training Results', 'All Spectra', 'Training Results, {}-epoch {}'.format(self.num_epochs, familiar_str))
+        
+        if os.path.exists(results_folder):   # prompt user to overwrite file if one already exists
+            if messagebox.askyesno('Duplicates Found', 'Folder with same data settings found;\nOverwrite old folder?'):
+                rmtree(results_folder, ignore_errors=True)
             else:
                 self.reset_training()
                 return  #terminate prematurely if overwrite permission is not given
-        os.makedirs(self.results_folder)
+        os.makedirs(results_folder)
 
-        with open(self.results_folder/'Training Settings.txt', 'a') as settings_file:  # make these variables more compact at some point
-            settings_file.write('Familiar Training? : {}\n'.format(fam_training))
+        with open(results_folder/'Training Settings.txt', 'a') as settings_file:  # make these variables more compact at some point
+            settings_file.write('Familiar Training : {}\n'.format(fam_training))
             settings_file.write('Number of Epochs : {}\n'.format(self.num_epochs))
             settings_file.write('Batchsize : {}\n'.format(self.batchsize))
             settings_file.write('Learn Rate : {}\n'.format(self.learnrate))
@@ -676,27 +687,26 @@ class PLATINUMS_App:
                     features, labels, occurrences = [], [], Counter()
                     train_set_size, eval_set_size = 0, 0
                          
-                    for species, (data, vector) in self.chem_data.items():
+                    for instance, (data, vector) in self.chem_data.items():
                         data = data[lower_bound:upper_bound]                      
-                        #if re.search('\A{}.*'.format(member), species):       # if the current species begins with <member>
-                        if self.isolate_species(species) == member:
+                        if self.isolate_species(instance) == member:
                             eval_set_size += 1
                             eval_data.append(data)
-                            eval_titles.append(species)
+                            eval_titles.append(instance)
                                                         
                             if eval_set_size <= num_spectra:
-                                plot_list.append( (data, species, 's') )
+                                plot_list.append((data, instance, 's'))
                                 
                             if fam_training:
                                 train_set_size += 1
                                 features.append(data)
                                 labels.append(vector)
-                                occurrences[self.get_family(species)] += 1                         
+                                occurrences[self.get_family(instance)] += 1                         
                         else:                                         
                             train_set_size += 1
                             features.append(data)
                             labels.append(vector)
-                            occurrences[self.get_family(species)] += 1
+                            occurrences[self.get_family(instance)] += 1
                     self.train_window.set_member( '{} ({} instances found)'.format(member, eval_set_size) )                      
                     x_train, x_test, y_train, y_test = train_test_split(np.array(features), np.array(labels), test_size=0.2)                     
 
@@ -704,7 +714,7 @@ class PLATINUMS_App:
                         for (x, y, group) in ( (x_train, y_train, 'training'), (x_test, y_test, 'test') ):
                             print('{} features/labels in {} set ({} of the data)'.format(
                                   (x.shape[0], y.shape[0]), group, round(100 * x.shape[0]/train_set_size, 2)) )
-                        print('\n{} features total. Of the {} species in training dataset:'.format(len(self.chem_data), train_set_size) )
+                        print('\n{} features total. Of the {} instances in training dataset:'.format(len(self.chem_data), train_set_size) )
                         for family in self.family_mapping.keys():
                             print('    {}% of data are {}'.format( round(100 * occurrences[family]/train_set_size, 2), family) )
                   
@@ -729,9 +739,9 @@ class PLATINUMS_App:
 
                 # PREDICTION OVER EVALUATION SET, EVALUATION OF PERFORMANCE                 
                     targets, num_correct = [], 0    # produce prediction values using the model and determine the accuracy of these predictions
-                    preds = [list(prediction) for prediction in model.predict(np.array(eval_data))]
+                    predictions = [list(prediction) for prediction in model.predict(np.array(eval_data))]
                     
-                    for prediction in preds:
+                    for prediction in predictions:
                         target_index = self.family_mapping[curr_family].index(1)
                         target = prediction[target_index]
                         targets.append(target)
@@ -745,8 +755,8 @@ class PLATINUMS_App:
                     loss_plot = (hist.history['loss'], 'Training Loss (Final = %0.2f)' % test_loss, 'm') 
                     accuracy_plot = (hist.history['accuracy'], 'Training Accuracy (Final = %0.2f%%)' % (100 * test_acc), 'm') 
                     fermi_plot = (fermi_data, '{}, {}/{} correct'.format(member, num_correct, eval_set_size), 'f')  
-                    summation_plot = ([self.average(column) for column in zip(*preds)], 'Standardized Summation', 'p')
-                    prediction_plots =  zip(preds, eval_titles, tuple('p' for i in preds))   # all the prediction plots                    
+                    summation_plot = ([self.average(column) for column in zip(*predictions)], 'Standardized Summation', 'p')
+                    prediction_plots =  zip(predictions, eval_titles, tuple('p' for i in predictions))   # all the prediction plots                    
                     
                     for plot in (loss_plot, accuracy_plot, fermi_plot, summation_plot, *prediction_plots): 
                         plot_list.append(plot)    
@@ -765,22 +775,21 @@ class PLATINUMS_App:
                     scores.append(num_correct/eval_set_size)
 
                 # CREATION OF FOLDERS, IF NECESSARY, AND PLOTS FOR THE CURRENT ROUND
-                    self.train_window.set_status('Writing Results to Folders...')    # creating folders as necessary, writing results to folders
-                    curr_dir = self.results_folder/point_range    
-                    if not os.path.exists(curr_dir):                                                           
-                        os.makedirs(curr_dir)
-                    self.adagraph(plot_list, 6, lower_bound, upper_bound, curr_dir/member)
+                    self.train_window.set_status('Writing Results to Folders...')    # creating folders as necessary, writing results to folders 
+                    if not os.path.exists(results_folder/point_range):                                                           
+                        os.makedirs(results_folder/point_range)
+                    self.adagraph(plot_list, 6, lower_bound, upper_bound, results_folder/point_range/member)
                     gc.collect()    # collect any junk remaining in RAM
-                    
-        self.train_window.set_status('Distributing Result Summaries...')   # distribution of summary data to the appropriate respective folders
+        
+        # DISTRIBUTION OF SUMMARY DATA TO APPROPRIATE RESPECTIVE FOLDERS
+        self.train_window.set_status('Distributing Result Summaries...')  
         for point_range, (fermi_data, score_data) in self.summaries.items(): 
-            curr_dir = self.results_folder/point_range
-            self.adagraph(fermi_data, 5, None, None, curr_dir/'Fermi Summary.png')
+            self.adagraph(fermi_data, 5, None, None, results_folder/point_range/'Fermi Summary.png')
                 
-            with open(curr_dir/'Scores.txt', 'a') as score_file:
+            with open(results_folder/point_range/'Scores.txt', 'a') as score_file:
                 for family, (names, scores) in score_data.items():
-                    family_header = '{}\n{}\n{}\n'.format('-'*20, family, '-'*20)
-                    score_file.write(family_header)    # an underlined heading for each family
+                    family_header = '{}\n{}\n{}\n'.format('-'*20, family, '-'*20)  # an underlined heading for each family
+                    score_file.write(family_header)   
 
                     processed_scores = sorted(zip(names, scores), key=lambda x : x[1], reverse=True)  # zip the scores together, then sort them in ascending order by score
                     processed_scores.append( ('AVERAGE : ', self.average(scores)) )
@@ -793,9 +802,11 @@ class PLATINUMS_App:
         self.train_window.set_status('Finished')
         
         runtime = timedelta(seconds=round(time() - start_time))   
-        with open(self.results_folder/'Training Settings.txt', 'a') as settings_file:
-            settings_file.write('\nTraining Time : {}'.format(runtime))
-        messagebox.showinfo('Training Complete', 'Routine completed successfully\nResults can be found in "Training Results" folders')
+        with open(results_folder/'Training Settings.txt', 'a') as settings_file:
+            settings_file.write('\nTraining Time : {}'.format(runtime))   # log the runtime in the Train Settings file
+        
+        if end_notification:
+            messagebox.showinfo('Training Complete', 'Routine completed successfully\nResults can be found in "Training Results" folders')
     
     
     def reset_training(self):
