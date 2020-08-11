@@ -1,2 +1,2 @@
 # PLATIN-UMS
- Application for neural network prediction and training with IMS spectra
+ SOP and Documentation are still WIP
