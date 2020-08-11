@@ -1,6 +1,7 @@
 import tkinter as tk
 from tkinter import messagebox
 from tkinter.ttk import Progressbar
+import TimTkLib as ttl     # my own tkinter widget library, makes GUI assembly a lot more straightforward 
 
 import csv, gc, math, os, re                 # general imports
 import numpy as np
@@ -16,234 +17,15 @@ from random import shuffle
 from collections import Counter
 
 import tensorflow as tf
-from tensorflow.keras import metrics                   # neural net libraries
-from tensorflow.keras.optimizers import Adam
+from tensorflow.keras import metrics, Input                   # neural net libraries
+from tensorflow.keras.optimizers import Adam, RMSprop
 from tensorflow.keras.models import Sequential
 from tensorflow.keras.layers import Dense, Dropout
 from tensorflow.keras.callbacks import EarlyStopping, Callback
 from sklearn.model_selection import train_test_split
 
 
-# SECTION 1 : some custom widget classes to make building and managing the GUI easier on myself ---------------------------------------------------           
-class DynOptionMenu:
-    '''My addon to the TKinter OptionMenu, adds methods to conveniently update menu contents'''
-    def __init__(self, frame, var, option_method, default=None, width=10, row=0, col=0, colspan=1):
-        self.option_method = option_method
-        self.default=default
-        self.menu = tk.OptionMenu(frame, var, (None,) )
-        self.menu.configure(width=width)
-        self.menu.grid(row=row, column=col, columnspan=colspan)
-        
-        self.var = var
-        self.contents = self.menu.children['menu']
-        self.update()
-        
-    def enable(self):
-        self.menu.configure(state='normal')
-        
-    def disable(self):
-        self.menu.configure(state='disabled')
-    
-    def reset_default(self):
-        self.var.set(self.default)
-    
-    def update(self):
-        self.contents.delete(0, 'end')
-        for option in self.option_method():
-            self.contents.add_command(label=option, command=lambda x=option: self.var.set(x))
-        self.reset_default()
-            
-            
-class ToggleFrame(tk.LabelFrame):
-    '''A frame whose contents can be easily disabled or enabled, If starting disabled, must put "self.disable()"
-    AFTER all widgets have been added to the frame'''
-    def __init__(self, window, text, default_state='normal', padx=5, pady=5, row=0, col=0):
-        tk.LabelFrame.__init__(self, window, text=text, padx=padx, pady=pady, bd=2, relief='groove')
-        self.grid(row=row, column=col)
-        self.state = default_state
-        self.apply_state()
-    
-    def apply_state(self):
-        for widget in self.winfo_children():
-            widget.configure(state = self.state)
-            
-    def enable(self):
-        self.state = 'normal'
-        self.apply_state()
-     
-    def disable(self):
-        self.state ='disabled'
-        self.apply_state()
-    
-    def toggle(self):
-        if self.state == 'normal':
-            self.disable()
-        else:
-            self.enable()
-
-
-class StatusBox:
-    '''A simple label which changes color and gives indictation of the status of something'''
-    def __init__(self, frame, on_message='On', off_message='Off', status=False, width=17, padx=0, row=0, col=0):
-        self.on_message = on_message
-        self.off_message = off_message
-        self.status_box = tk.Label(frame, width=width, padx=padx)
-        self.status_box.grid(row=row, column=col)
-        self.set_status(status)
-        
-    def set_status(self, status):
-        if type(status) != bool:
-            raise Exception(TypeError)
-        
-        if status:
-            self.status_box.configure(bg='green2', text=self.on_message)
-        else:
-            self.status_box.configure(bg='light gray', text=self.off_message)
-            
-            
-class ConfirmButton: 
-    '''A confirmation button, will execute whatever function is passed to it when pressed. 
-    Be sure to exclude parenthesis when passing the bound functions'''
-    def __init__(self, frame, funct, padx=5, row=0, col=0, cs=1, sticky=None):
-        self.button =tk.Button(frame, text='Confirm Selection', command=funct, padx=padx)
-        self.button.grid(row=row, column=col, columnspan=cs, sticky=sticky)
-      
-    
-class LabelledEntry:
-    '''An entry with an adjacent label to the right. Use "self.get_value()" method to retrieve state of
-    variable. Be sure to leave two columns worth of space for this widget'''
-    def __init__(self, frame, text, var, state='normal', default=None, width=10, row=0, col=0):
-        self.default = default
-        self.var = var
-        self.reset_default()
-        self.label = tk.Label(frame, text=text, state=state)
-        self.label.grid(row=row, column=col)
-        self.entry = tk.Entry(frame, width=width, textvariable=self.var, state=state)
-        self.entry.grid(row=row, column=col+1)
-        
-    def get_value(self):
-        return self.var.get()
-    
-    def set_value(self, value):
-        self.var.set(value)
-    
-    def reset_default(self):
-        self.var.set(self.default)
-    
-    def configure(self, **kwargs):   # allows for disabling in ToggleFrames
-        self.label.configure(**kwargs)
-        self.entry.configure(**kwargs)
-        
-    
-class Switch: 
-    '''A switch button, clicking inverts the boolean state and button display. State can be accessed via
-    the <self>.state() method or with the <self>.var.get() attribute to use dynamically with tkinter'''
-    def __init__(self, frame, text, value=False, dep_state='normal', dependents=None, width=10, row=0, col=0):
-        self.label = tk.Label(frame, text=text)
-        self.label.grid(row=row, column=col)
-        self.switch = tk.Button(frame, width=width, command=self.toggle)
-        self.switch.grid(row=row, column=col+1)
-    
-        self.dependents = dependents
-        self.dep_state = dep_state
-        self.value = value
-        self.apply_state()
-    
-    def get_text(self):
-        return self.value and 'Enabled' or 'Disabled'
-        
-    def get_color(self):
-        return self.value and 'green2' or 'red' 
-    
-    def apply_state(self):
-        self.dep_state = (self.value and 'normal' or 'disabled')
-        self.switch.configure(text=self.get_text(), bg=self.get_color())
-        if self.dependents:
-            for widget in self.dependents:
-                widget.configure(state=self.dep_state)
-                
-    def enable(self):
-        self.value = True
-        self.apply_state()
-     
-    def disable(self):
-        self.value = False
-        self.apply_state()
-    
-    def toggle(self):
-        if self.value:
-            self.disable()
-        else:
-            self.enable()  
-           
-        
-class GroupableCheck:
-    '''A checkbutton which will add or remove its value to an output list
-    (passed as an argument when creating an instance) based on its check status'''
-    def __init__(self, frame, value, output, state='normal', row=0, col=0):
-        self.var = tk.StringVar()
-        self.value = value
-        self.output = output
-        self.state = state
-        self.cb = tk.Checkbutton(frame, text=value, variable=self.var, onvalue=self.value, offvalue=None,
-                              state=self.state, command=self.edit_output)
-        self.cb.grid(row=row, column=col, sticky='w')
-        self.cb.deselect()
-        
-    def edit_output(self):
-        if self.var.get() == self.value:
-            self.output.append(self.value)
-        else:
-            self.output.remove(self.value)
-            
-    def configure(self, **kwargs):
-        self.cb.configure(**kwargs)
-            
-class CheckPanel:
-    '''A panel of GroupableChecks, allows for simple selectivity of the contents of some list'''
-    def __init__(self, frame, data, output, state='normal', ncols=4, row_start=0, col_start=0):
-        self.output = output
-        self.state = state
-        self.row_span = math.ceil(len(data)/ncols)
-        self.panel = [ GroupableCheck(frame, val, output, state=self.state, row=row_start + i//ncols, col=col_start + i%ncols) for i, val in enumerate(data) ]
-        
-    def wipe_output(self):
-        self.output.clear()
-        
-    def apply_state(self):
-        for gc in self.panel:
-            gc.configure(state=self.state)
-    
-    def enable(self):
-        self.state = 'normal'
-        self.apply_state()
-     
-    def disable(self):
-        self.state = 'disabled'
-        self.apply_state()
-    
-    def toggle(self):
-        if self.state == 'normal':
-            self.disable()
-        else:
-            self.enable()        
-        
-class SelectionWindow:
-    '''The window used to select species for evaluation'''
-    def __init__(self, main, parent_frame, size, selections, output, ncols=1):
-        self.window = tk.Toplevel(main)
-        self.window.title('Select Members to Include')
-        self.window.geometry(size)
-        self.parent = parent_frame
-        self.parent.disable()
-        
-        self.panel = CheckPanel(self.window, selections, output, ncols=ncols)
-        self.confirm = ConfirmButton(self.window, self.confirm, row=self.panel.row_span + 1, col=ncols-1)
-
-    def confirm(self):
-        self.parent.enable()
-        self.window.destroy()
-        
+# SECTION 1 : custom classes needed to operate some features of the main GUI  ---------------------------------------------------                   
 class TkEpochs(Callback):   
     '''A custom keras Callback to display the current epoch in the training progress window'''
     def __init__(self, train_window):
@@ -302,7 +84,7 @@ class TrainingWindow:
         self.reset()
     
         #Training Buttons
-        self.button_frame = ToggleFrame(self.training_window, '', padx=0, pady=0, row=1)
+        self.button_frame = ttl.ToggleFrame(self.training_window, '', padx=0, pady=0, row=1)
         self.retrain_button = tk.Button(self.button_frame, text='Retrain', width=17, bg='dodger blue', command=train_funct)
         self.reinput_button = tk.Button(self.button_frame, text='Reset', width=17, bg='orange', command=reset_funct)
         self.abort_button = tk.Button(self.button_frame, text='Abort Training', width=17, bg='red', command=self.abort)
@@ -357,16 +139,17 @@ class TrainingWindow:
         self.train_button.configure(state='normal')
         self.training_window.destroy()
         
-# Section 2: Start of actual GUI app class code ------------------------------------------------------------------------------------------------------------
+# Section 2: Start of code for the actual GUI and application ------------------------------------------------------------------------------------------------------------
 class PLATINUMS_App:
     def __init__(self, main):
+        
         #Main Window
         self.main = main
         self.main.title('PLATIN-UMS 4.2.2-alpha')
         self.main.geometry('445x420')
 
         #Frame 1
-        self.data_frame = ToggleFrame(self.main, 'Select CSV to Read: ', padx=21, pady=5, row=0)
+        self.data_frame = ttl.ToggleFrame(self.main, 'Select CSV to Read: ', padx=21, pady=5, row=0)
         self.chosen_file = tk.StringVar()
         self.chem_data = {}
         self.all_species = set()
@@ -374,17 +157,17 @@ class PLATINUMS_App:
         self.family_mapping = {}
         self.spectrum_size = None
         
-        self.csv_menu = DynOptionMenu(self.data_frame, self.chosen_file, self.get_csvs, default='--Choose a CSV--', width=28, colspan=2)
+        self.csv_menu = ttl.DynOptionMenu(self.data_frame, self.chosen_file, self.get_csvs, default='--Choose a CSV--', width=28, colspan=2)
         self.read_label = tk.Label(self.data_frame, text='Read Status:')
-        self.read_status = StatusBox(self.data_frame, on_message='CSV Read!', off_message='No File Read', row=1, col=1)
+        self.read_status = ttl.StatusBox(self.data_frame, on_message='CSV Read!', off_message='No File Read', row=1, col=1)
         self.refresh_button = tk.Button(self.data_frame, text='Refresh CSVs', command=self.csv_menu.update, padx=15)
-        self.confirm_data = ConfirmButton(self.data_frame, self.import_data, padx=2, row=1, col=2)
+        self.confirm_data = ttl.ConfirmButton(self.data_frame, self.import_data, padx=2, row=1, col=2)
         
         self.refresh_button.grid(row=0, column=2)
         self.read_label.grid(row=1, column=0)
         
         #Frame 2
-        self.input_frame = ToggleFrame(self.main, 'Select Input Mode: ', padx=5, pady=5, row=1)
+        self.input_frame = ttl.ToggleFrame(self.main, 'Select Input Mode: ', padx=5, pady=5, row=1)
         self.read_mode = tk.StringVar()
         self.read_mode.set(None)
         self.selections = []
@@ -394,7 +177,7 @@ class PLATINUMS_App:
         for i, mode in enumerate( ('Select All', 'By Family', 'By Species') ):
             tk.Radiobutton(self.input_frame, text=mode, value=mode, var=self.read_mode, command=self.further_sel)
             self.mode_buttons[i].grid(row=0, column=i)
-        self.confirm_sels = ConfirmButton(self.input_frame, self.confirm_inputs, row=0, col=3, sticky='e')
+        self.confirm_sels = ttl.ConfirmButton(self.input_frame, self.confirm_inputs, row=0, col=3, sticky='e')
         self.input_frame.disable()
         
         #Frame 3
@@ -402,11 +185,11 @@ class PLATINUMS_App:
         self.batchsize = None
         self.learnrate = None
         
-        self.hyper_frame = ToggleFrame(self.main, 'Set Hyperparameters: ', padx=8, pady=5, row=2)
-        self.epoch_entry = LabelledEntry(self.hyper_frame, 'Epochs:', tk.IntVar(), width=19, default=8)
-        self.batchsize_entry = LabelledEntry(self.hyper_frame, 'Batchsize:', tk.IntVar(), width=19, default=32, row=1)
-        self.learnrate_entry = LabelledEntry(self.hyper_frame, 'Learnrate:', tk.DoubleVar(), width=18, default=2e-5, col=3)
-        self.confirm_hyperparams = ConfirmButton(self.hyper_frame, self.confirm_hp, row=1, col=3, cs=2, sticky='e')
+        self.hyper_frame = ttl.ToggleFrame(self.main, 'Set Hyperparameters: ', padx=8, pady=5, row=2)
+        self.epoch_entry = ttl.LabelledEntry(self.hyper_frame, 'Epochs:', tk.IntVar(), width=19, default=8)
+        self.batchsize_entry = ttl.LabelledEntry(self.hyper_frame, 'Batchsize:', tk.IntVar(), width=19, default=32, row=1)
+        self.learnrate_entry = ttl.LabelledEntry(self.hyper_frame, 'Learnrate:', tk.DoubleVar(), width=18, default=2e-5, col=3)
+        self.confirm_hyperparams = ttl.ConfirmButton(self.hyper_frame, self.confirm_hp, row=1, col=3, cs=2, sticky='e')
         self.hyper_frame.disable()
         
         #Frame 4
@@ -415,20 +198,20 @@ class PLATINUMS_App:
         self.slice_decrement = None
         self.num_slices = None
         
-        self.param_frame = ToggleFrame(self.main, 'Set Training Parameters: ', padx=9, pady=5, row=3) 
-        self.fam_switch = Switch(self.param_frame, 'Familiar Training :', row=0, col=1)
-        self.stop_switch = Switch(self.param_frame, 'Early Stopping: ', row=1, col=1)
-        self.trim_switch = Switch(self.param_frame, 'RIP Trimming: ', row=2, col=1)
+        self.param_frame = ttl.ToggleFrame(self.main, 'Set Training Parameters: ', padx=9, pady=5, row=3) 
+        self.fam_switch = ttl.Switch(self.param_frame, 'Familiar Training :', row=0, col=1)
+        self.stop_switch = ttl.Switch(self.param_frame, 'Early Stopping: ', row=1, col=1)
+        self.trim_switch = ttl.Switch(self.param_frame, 'RIP Trimming: ', row=2, col=1)
 
         self.cycle_fams = tk.IntVar()
         self.cycle_button = tk.Checkbutton(self.param_frame, text='Cycle', variable=self.cycle_fams)
         self.cycle_button.grid(row=0, column=3)
         
-        self.upper_bound_entry = LabelledEntry(self.param_frame, 'Upper Bound:', tk.IntVar(), default=400, row=3, col=0)
-        self.slice_decrement_entry = LabelledEntry(self.param_frame, 'Slice Decrement:', tk.IntVar(), default=20, row=3, col=2)
-        self.lower_bound_entry = LabelledEntry(self.param_frame, 'Lower Bound:', tk.IntVar(), default=50, row=4, col=0)
-        self.n_slice_entry = LabelledEntry(self.param_frame, 'Number of Slices:', tk.IntVar(), default=1, row=4, col=2)
-        self.confirm_training_params = ConfirmButton(self.param_frame, self.confirm_tparams, row=5, col=2, cs=2, sticky='e')
+        self.upper_bound_entry = ttl.LabelledEntry(self.param_frame, 'Upper Bound:', tk.IntVar(), default=400, row=3, col=0)
+        self.slice_decrement_entry = ttl.LabelledEntry(self.param_frame, 'Slice Decrement:', tk.IntVar(), default=20, row=3, col=2)
+        self.lower_bound_entry = ttl.LabelledEntry(self.param_frame, 'Lower Bound:', tk.IntVar(), default=50, row=4, col=0)
+        self.n_slice_entry = ttl.LabelledEntry(self.param_frame, 'Number of Slices:', tk.IntVar(), default=1, row=4, col=2)
+        self.confirm_training_params = ttl.ConfirmButton(self.param_frame, self.confirm_tparams, row=5, col=2, cs=2, sticky='e')
 
         self.trim_switch.dependents = (self.upper_bound_entry, self.slice_decrement_entry, self.lower_bound_entry, self.n_slice_entry)
         self.switches = (self.fam_switch, self.stop_switch, self.trim_switch)
@@ -567,9 +350,9 @@ class PLATINUMS_App:
         if self.read_mode.get() == 'Select All':
             self.selections = self.all_species
         elif self.read_mode.get() == 'By Species':
-            SelectionWindow(self.main, self.input_frame, '1000x210', self.all_species, self.selections, ncols=8)
+            ttl.SelectionWindow(self.main, self.input_frame, '1000x210', self.all_species, self.selections, ncols=8)
         elif self.read_mode.get() == 'By Family':
-            SelectionWindow(self.main, self.input_frame, '270x85', self.families, self.selections, ncols=3)
+            ttl.SelectionWindow(self.main, self.input_frame, '270x85', self.families, self.selections, ncols=3)
 
     def confirm_inputs(self):
         '''Confirm species input selections'''
@@ -723,11 +506,11 @@ class PLATINUMS_App:
                         model = Sequential()                              # model block is created, layers are created/added in this block
                         model.add(Dense(512, input_dim=(upper_bound - lower_bound), activation='relu'))  # 512 neuron input layer
                         model.add(Dropout(0.5))                                    # dropout layer, to reduce overfit
-                        #model.add(Dense(512, activation='relu'))                  # 512 neuron hidden layer
                         model.add(Dense(512, activation='relu'))                   # 512 neuron hidden layer
                         model.add(Dense(len(self.families), activation='softmax')) # softmax gives prob. dist. of identity over all families
                         model.compile(loss='categorical_crossentropy', optimizer=Adam(lr=self.learnrate), metrics=['accuracy']) 
-                    #model.summary()
+                    if verbosity:
+                        model.summary()
                       
                     hist = model.fit(x_train, y_train, epochs=self.num_epochs, batch_size=self.batchsize, callbacks=self.keras_callbacks, verbose=verbosity and 2 or 0)  
                     test_loss, test_acc = model.evaluate(x_test, y_test, verbose=(verbosity and 2 or 0))  # keras' self evaluation of loss and accuracy metrics
