@@ -150,7 +150,7 @@ class PLATINUMS_App:
         
         #Main Window
         self.main = main
-        self.main.title('PLATIN-UMS 4.2.5-alpha')
+        self.main.title('PLATIN-UMS 4.2.7-alpha')
         self.main.geometry('445x420')
 
         #Frame 1
@@ -184,9 +184,7 @@ class PLATINUMS_App:
         self.input_frame.disable()
         
         #Frame 3
-        self.num_epochs = None
-        self.batchsize = None
-        self.learnrate = None
+        self.hyperparams = {}
         
         self.hyperparam_frame =    ttl.ToggleFrame(self.main, 'Set Hyperparameters: ', padx=8, pady=5, row=2)
         self.epoch_entry =         ttl.LabelledEntry(self.hyperparam_frame, 'Epochs:', tk.IntVar(), width=19, default=2048)
@@ -224,7 +222,7 @@ class PLATINUMS_App:
         self.frames = (self.data_frame, self.input_frame, self.hyperparam_frame, self.param_frame)
         self.switches = (self.fam_switch, self.stop_switch, self.trim_switch)
         self.entries = (self.epoch_entry, self.batchsize_entry, self.learnrate_entry, self.n_slice_entry, self.upper_bound_entry, self.slice_decrement_entry, self.lower_bound_entry)
-        self.arrays = (self.chem_data, self.selections, self.family_mapping)
+        self.arrays = (self.chem_data, self.selections, self.family_mapping, self.hyperparams)
 
         self.exit_button =  tk.Button(self.main, text='Exit', padx=22, pady=22, bg='red', command=self.shutdown)
         self.reset_button = tk.Button(self.main, text='Reset', padx=20, bg='orange', command=self.reset)
@@ -335,9 +333,9 @@ class PLATINUMS_App:
     # Frame 3 (hyperparameter) Methods
     def confirm_hp(self):
         '''Confirm hyperparameter selections'''
-        self.num_epochs = self.epoch_entry.get_value()
-        self.batchsize = self.batchsize_entry.get_value()
-        self.learnrate = self.learnrate_entry.get_value()
+        self.hyperparams['Number of Epochs'] = self.epoch_entry.get_value()
+        self.hyperparams['Batch Size'] = self.batchsize_entry.get_value()
+        self.hyperparams['Learn Rate'] = self.learnrate_entry.get_value()  
         self.isolate(self.param_frame)
         self.trim_switch.disable()   #ensures that the trimming menu stays greyed out, not necessary for the other switches 
     
@@ -375,183 +373,185 @@ class PLATINUMS_App:
         total_rounds = len(self.selections)
         if self.trim_switch.value:  #if RIP trimming is enabled
             total_rounds += len(self.selections)*self.num_slices
+        if self.cycle_fams.get():    #if familiar cycling is enabled
+            total_rounds *= 2
 
-        for familiar_cycling in range(1 + self.cycle_fams.get()):  # similar to RIP trimming True/False loop, enables cycling thru both fams and unfams
-            if familiar_cycling:
-                self.fam_switch.toggle()
-            self.reset_training()
-            self.train_button.configure(state='disabled')
-            self.train_window = TrainingWindow(self.main, total_rounds, self.num_epochs, self.begin_training, self.reset, self.train_button)
-            self.keras_callbacks.append(TkEpochs(self.train_window))
-            
-            end_notification = (self.cycle_fams.get() == familiar_cycling)  # wont show end notification (and pause training) if not on last cycle
-            self.training(end_notification=end_notification)
+        self.reset_training()
+        self.train_button.configure(state='disabled')
+        self.train_window = TrainingWindow(self.main, total_rounds, self.hyperparams['Number of Epochs'], self.begin_training, self.reset, self.train_button)
+        self.keras_callbacks.append(TkEpochs(self.train_window))
+        self.training()
      
     # Section 2A: the training routine code itself 
-    def training(self, end_notification=True, num_spectra=2, verbosity=False):
+    def training(self, num_spectra=2, verbosity=False):
         '''The neural net training function itself'''
-        start_time = time()    # log start of runtime
         current_round = 0      # initialize dummy round counter at round 0
-        fam_training = self.fam_switch.value 
+        for familiar_cycling in range(1 + self.cycle_fams.get()):  # if cycling is enabled, run throught the training twice, toggling familiar status in between      
+            if familiar_cycling:
+                self.fam_switch.toggle()  # toggle the unfamiliar status the second time through (only occurs if cycling is enabled)
+                self.summaries.clear()
+            
+            # FILE MANAGEMENT FOR TRAIN SETTINGS RECORD AND RESULTS FOLDERS
+            start_time = time()    # log start of runtime, will re-log if cycling is enabled
+            fam_training = self.fam_switch.value    
+            familiar_str = '{}amiliar'.format(fam_training and 'F' or 'Unf')  # some str formatting based on whether the current training type is familiar or unfamiliar
+            self.train_window.set_familiar_status(familiar_str)
+            
+            self.train_window.set_status('Creating Folders...')
+            results_folder = Path('Saved Training Results', 'All Spectra', 'Training Results, {}-epoch {}'.format(self.hyperparams['Number of Epochs'], familiar_str))
+            if os.path.exists(results_folder):   # prompt user to overwrite file if one already exists
+                if messagebox.askyesno('Duplicates Found', 'Folder with same data settings found;\nOverwrite old folder?'):
+                    rmtree(results_folder, ignore_errors=True)
+                else:
+                    self.reset_training()
+                    return  #terminate prematurely if overwrite permission is not given
+            os.makedirs(results_folder)
+
+            with open(results_folder/'Training Settings.txt', 'a') as settings_file:  # make these variables more compact at some point
+                settings_file.write('Familiar Training : {}\n'.format(fam_training))
+                for hyperparam, value in self.hyperparams.items():
+                    settings_file.write('{} : {}\n'.format(hyperparam, value))
+            
+            for instance, member in enumerate(self.selections):         # iterate over all selected species
+                for select_RIP in range(1 + int(self.trim_switch.value)):   # if trimming is enabled, will re-cycle through with trimming
+                    for segment in range(select_RIP and self.num_slices or 1):  # perform as many slices as are specified (with no trimming, just 1)
+                    # INITIALIZATION OF SOME INFORMATION REGARDING THE CURRENT ROUND
+                        self.train_window.set_status('Training...')
+                        curr_family = iumsutils.get_family(member)
+
+                        current_round += 1
+                        self.train_window.set_round_progress(current_round)
+
+                        if select_RIP:
+                            lower_bound, upper_bound = self.trimming_min, self.trimming_max - self.slice_decrement*segment
+                            point_range = 'Points {}-{}'.format(lower_bound, upper_bound)
+                        else:
+                            lower_bound, upper_bound =  0, self.spectrum_size
+                            point_range = 'Full Spectra'
+                        self.train_window.set_slice(point_range)                 
+
+                    # EVALUATION AND TRAINING SET SELECTION AND SPLITTING 
+                        plot_list = []
+                        eval_data, eval_titles = [], []
+                        features, labels, occurrences = [], [], Counter()
+                        train_set_size, eval_set_size = 0, 0
+
+                        for instance, (data, vector) in self.chem_data.items():
+                            data = data[lower_bound:upper_bound]                      
+                            if iumsutils.isolate_species(instance) == member:  # add all instances of the current species to the evaluation set
+                                eval_set_size += 1
+                                eval_data.append(data)
+                                eval_titles.append(instance)
+
+                                if eval_set_size <= num_spectra:  # add sample spectra to the list of plots up to the number assigned
+                                    plot_list.append((data, instance, 's'))
+
+                            if iumsutils.isolate_species(instance) != member or fam_training:  # add any instance to the training set, unless its a member                                    
+                                train_set_size += 1                                       # of the current species and unfamiliar trainin is enabled
+                                features.append(data)
+                                labels.append(vector)
+                                occurrences[iumsutils.get_family(instance)] += 1
+
+                        self.train_window.set_member( '{} ({} instances found)'.format(member, eval_set_size) )                      
+                        x_train, x_test, y_train, y_test = train_test_split(np.array(features), np.array(labels), test_size=0.2)                     
+
+                        if verbosity:   # optional printout, gives overview of the training data and the model settings
+                            for (x, y, group) in ( (x_train, y_train, 'training'), (x_test, y_test, 'test') ):
+                                print('{} features/labels in {} set ({} of the data)'.format(
+                                      (x.shape[0], y.shape[0]), group, round(100 * x.shape[0]/train_set_size, 2)) )
+                            print('\n{} features total. Of the {} instances in training dataset:'.format(len(self.chem_data), train_set_size) )
+                            for family in self.family_mapping.keys():
+                                print('    {}% of data are {}'.format( round(100 * occurrences[family]/train_set_size, 2), family) )
+
+                    # MODEL CREATION AND TRAINING
+                        with tf.device('CPU:0'):     # eschews the requirement for a brand-new NVIDIA graphics card (which we don't have anyways)                      
+                            model = Sequential()                              # model block is created, layers are created/added in this block
+                            model.add(Dense(512, input_dim=(upper_bound - lower_bound), activation='relu'))  # 512 neuron input layer
+                            model.add(Dropout(0.5))                                    # dropout layer, to reduce overfit
+                            model.add(Dense(512, activation='relu'))                   # 512 neuron hidden layer
+                            model.add(Dense(len(self.families), activation='softmax')) # softmax gives prob. dist. of identity over all families
+                            model.compile(loss='categorical_crossentropy', optimizer=Adam(lr=self.hyperparams['Learn Rate']), metrics=['accuracy']) 
+                        if verbosity:
+                            model.summary()
+
+                        # model training occurs here
+                        hist = model.fit(x_train, y_train, callbacks=self.keras_callbacks, verbose=verbosity and 2 or 0, 
+                                         epochs=self.hyperparams['Number of Epochs'], batch_size=self.hyperparams['Batch Size'])
+                        test_loss, test_acc = model.evaluate(x_test, y_test, verbose=(verbosity and 2 or 0))  # keras' self evaluation of loss and accuracy metrics
+
+                        if self.train_window.end_training:  # condition to escape training loop of training is aborted
+                            messagebox.showerror('Training has Stopped', 'Training aborted by user;\nProceed from Progress Window')
+                            self.train_window.button_frame.enable()
+                            return     # without this, aborting training only pauses one iteration of loop
+
+                    # PREDICTION OVER EVALUATION SET, EVALUATION OF PERFORMANCE                 
+                        targets, num_correct = [], 0    # produce prediction values using the model and determine the accuracy of these predictions
+                        predictions = [list(prediction) for prediction in model.predict(np.array(eval_data))]
+
+                        for prediction in predictions:
+                            target_index = self.family_mapping[curr_family].index(1)
+                            target = prediction[target_index]
+                            targets.append(target)
+
+                            if max(prediction) == target:
+                                num_correct += 1
+                        targets.sort(reverse=True)
+                        fermi_data = [AAV/max(targets) for AAV in targets]
+
+                    # PACKAGING OF ALL PLOTS, APART FROM THE EVALUATION SPECTRA
+                        loss_plot = (hist.history['loss'], 'Training Loss (Final = %0.2f)' % test_loss, 'm') 
+                        accuracy_plot = (hist.history['accuracy'], 'Training Accuracy (Final = %0.2f%%)' % (100 * test_acc), 'm') 
+                        fermi_plot = (fermi_data, '{}, {}/{} correct'.format(member, num_correct, eval_set_size), 'f')  
+                        summation_plot = ([iumsutils.average(column) for column in zip(*predictions)], 'Standardized Summation', 'p')
+                        prediction_plots =  zip(predictions, eval_titles, tuple('p' for i in predictions))   # all the prediction plots                    
+
+                        for plot in (loss_plot, accuracy_plot, fermi_plot, summation_plot, *prediction_plots): 
+                            plot_list.append(plot)    
+
+                    # ORGANIZATION AND ADDITION OF RELEVANT DATA TO THE SUMMARY DICT
+                        if point_range not in self.summaries:    # adding relevant data to the summary dict                                 
+                            self.summaries[point_range] = ( [], {} )
+                        fermi_data, score_data = self.summaries[point_range]
+
+                        fermi_data.append(fermi_plot)
+
+                        if curr_family not in score_data:
+                            score_data[curr_family] = ( [], [] )
+                        names, scores = score_data[curr_family]
+                        names.append(member)
+                        scores.append(num_correct/eval_set_size)
+
+                    # CREATION OF FOLDERS, IF NECESSARY, AND PLOTS FOR THE CURRENT ROUND
+                        self.train_window.set_status('Writing Results to Folders...')    # creating folders as necessary, writing results to folders 
+                        if not os.path.exists(results_folder/point_range):                                                           
+                            os.makedirs(results_folder/point_range)
+                        self.adagraph(plot_list, 6, results_folder/point_range/member, lower_bound=lower_bound, upper_bound=upper_bound)
         
-        familiar_str = '{}amiliar'.format(fam_training and 'F' or 'Unf')  # some str formatting based on whether the current training type is familiar or unfamiliar
-        self.train_window.set_familiar_status(familiar_str)
-        results_folder = Path('Saved Training Results', 'All Spectra', 'Training Results, {}-epoch {}'.format(self.num_epochs, familiar_str))
+            # DISTRIBUTION OF SUMMARY DATA TO APPROPRIATE RESPECTIVE FOLDERS
+            self.train_window.set_status('Distributing Result Summaries...')  
+            for point_range, (fermi_data, score_data) in self.summaries.items(): 
+                self.adagraph(fermi_data, 5, results_folder/point_range/'Fermi Summary.png')
+
+                with open(results_folder/point_range/'Scores.txt', 'a') as score_file:
+                    for family, (names, scores) in score_data.items():
+                        family_header = '{}\n{}\n{}\n'.format('-'*20, family, '-'*20)  # an underlined heading for each family
+                        score_file.write(family_header)   
+
+                        processed_scores = sorted(zip(names, scores), key=lambda x : x[1], reverse=True)  # zip the scores together, then sort them in ascending order by score
+                        processed_scores.append( ('AVERAGE : ', iumsutils.average(scores)) )
+
+                        for name, score in processed_scores:
+                            score_file.write('{} : {}\n'.format(name, score))
+                        score_file.write('\n')   # leave a gap between each family
+            
+            with open(results_folder/'Training Settings.txt', 'a') as settings_file:  # log the training time in the Train Settings file
+                runtime = timedelta(seconds=round(time() - start_time))
+                settings_file.write('\nTraining Time : {}'.format(runtime))   
         
-        if os.path.exists(results_folder):   # prompt user to overwrite file if one already exists
-            if messagebox.askyesno('Duplicates Found', 'Folder with same data settings found;\nOverwrite old folder?'):
-                rmtree(results_folder, ignore_errors=True)
-            else:
-                self.reset_training()
-                return  #terminate prematurely if overwrite permission is not given
-        os.makedirs(results_folder)
-
-        with open(results_folder/'Training Settings.txt', 'a') as settings_file:  # make these variables more compact at some point
-            settings_file.write('Familiar Training : {}\n'.format(fam_training))
-            settings_file.write('Number of Epochs : {}\n'.format(self.num_epochs))
-            settings_file.write('Batchsize : {}\n'.format(self.batchsize))
-            settings_file.write('Learn Rate : {}\n'.format(self.learnrate))
-                  
-        for instance, member in enumerate(self.selections):     # iterate over all selected species
-            for select_RIP in range(1 + int(self.trim_switch.value)):     # if trimming is enabled, will re-cycle through with trimming
-                for segment in range(select_RIP and self.num_slices or 1):  # perform as many slices as are specified (with no trimming, just 1)
-                # INITIALIZE SOME INFORMATION REGARDING THE CURRENT ROUND
-                    self.train_window.set_status('Training...')
-                    curr_family = iumsutils.get_family(member)
-                    
-                    current_round += 1
-                    self.train_window.set_round_progress(current_round)
-                                
-                    if select_RIP:
-                        lower_bound, upper_bound = self.trimming_min, self.trimming_max - self.slice_decrement*segment
-                        point_range = 'Points {}-{}'.format(lower_bound, upper_bound)
-                    else:
-                        lower_bound, upper_bound =  0, self.spectrum_size
-                        point_range = 'Full Spectra'
-                    self.train_window.set_slice(point_range)                 
-
-                # EVALUATION AND TRAINING SET SELECTION AND SPLITTING 
-                    plot_list = []
-                    eval_data, eval_titles = [], []
-                    features, labels, occurrences = [], [], Counter()
-                    train_set_size, eval_set_size = 0, 0
-                         
-                    for instance, (data, vector) in self.chem_data.items():
-                        data = data[lower_bound:upper_bound]                      
-                        if iumsutils.isolate_species(instance) == member:  # add all instances of the current species to the evaluation set
-                            eval_set_size += 1
-                            eval_data.append(data)
-                            eval_titles.append(instance)
-                                                        
-                            if eval_set_size <= num_spectra:  # add sample spectra to the list of plots up to the number assigned
-                                plot_list.append((data, instance, 's'))
-                       
-                        if iumsutils.isolate_species(instance) != member or fam_training:  # add any instance to the training set, unless its a member                                    
-                            train_set_size += 1                                       # of the current species and unfamiliar trainin is enabled
-                            features.append(data)
-                            labels.append(vector)
-                            occurrences[iumsutils.get_family(instance)] += 1
-                            
-                    self.train_window.set_member( '{} ({} instances found)'.format(member, eval_set_size) )                      
-                    x_train, x_test, y_train, y_test = train_test_split(np.array(features), np.array(labels), test_size=0.2)                     
-
-                    if verbosity:   # optional prinout, gives overview of the training data and the model settings
-                        for (x, y, group) in ( (x_train, y_train, 'training'), (x_test, y_test, 'test') ):
-                            print('{} features/labels in {} set ({} of the data)'.format(
-                                  (x.shape[0], y.shape[0]), group, round(100 * x.shape[0]/train_set_size, 2)) )
-                        print('\n{} features total. Of the {} instances in training dataset:'.format(len(self.chem_data), train_set_size) )
-                        for family in self.family_mapping.keys():
-                            print('    {}% of data are {}'.format( round(100 * occurrences[family]/train_set_size, 2), family) )
-                  
-                # MODEL CREATION AND TRAINING
-                    with tf.device('CPU:0'):                            
-                        model = Sequential()                              # model block is created, layers are created/added in this block
-                        model.add(Dense(512, input_dim=(upper_bound - lower_bound), activation='relu'))  # 512 neuron input layer
-                        model.add(Dropout(0.5))                                    # dropout layer, to reduce overfit
-                        model.add(Dense(512, activation='relu'))                   # 512 neuron hidden layer
-                        model.add(Dense(len(self.families), activation='softmax')) # softmax gives prob. dist. of identity over all families
-                        model.compile(loss='categorical_crossentropy', optimizer=Adam(lr=self.learnrate), metrics=['accuracy']) 
-                    if verbosity:
-                        model.summary()
-                      
-                    hist = model.fit(x_train, y_train, epochs=self.num_epochs, batch_size=self.batchsize, callbacks=self.keras_callbacks, verbose=verbosity and 2 or 0)  
-                    test_loss, test_acc = model.evaluate(x_test, y_test, verbose=(verbosity and 2 or 0))  # keras' self evaluation of loss and accuracy metrics
-                    
-                    if self.train_window.end_training:  # condition to escape training loop of training is aborted
-                        messagebox.showerror('Training has Stopped', 'Training aborted by user;\nProceed from Progress Window')
-                        self.train_window.button_frame.enable()
-                        return     # without this, aborting training only pauses one iteration of loop
-
-                # PREDICTION OVER EVALUATION SET, EVALUATION OF PERFORMANCE                 
-                    targets, num_correct = [], 0    # produce prediction values using the model and determine the accuracy of these predictions
-                    predictions = [list(prediction) for prediction in model.predict(np.array(eval_data))]
-                    
-                    for prediction in predictions:
-                        target_index = self.family_mapping[curr_family].index(1)
-                        target = prediction[target_index]
-                        targets.append(target)
-                        
-                        if max(prediction) == target:
-                            num_correct += 1
-                    targets.sort(reverse=True)
-                    fermi_data = [AAV/max(targets) for AAV in targets]
-                    
-                # PACKAGING OF ALL PLOTS, APART FROM THE SAMPLE SPECTRA
-                    loss_plot = (hist.history['loss'], 'Training Loss (Final = %0.2f)' % test_loss, 'm') 
-                    accuracy_plot = (hist.history['accuracy'], 'Training Accuracy (Final = %0.2f%%)' % (100 * test_acc), 'm') 
-                    fermi_plot = (fermi_data, '{}, {}/{} correct'.format(member, num_correct, eval_set_size), 'f')  
-                    summation_plot = ([iumsutils.average(column) for column in zip(*predictions)], 'Standardized Summation', 'p')
-                    prediction_plots =  zip(predictions, eval_titles, tuple('p' for i in predictions))   # all the prediction plots                    
-                    
-                    for plot in (loss_plot, accuracy_plot, fermi_plot, summation_plot, *prediction_plots): 
-                        plot_list.append(plot)    
-
-                # ORGANIZATION AND ADDITION OF RELEVANT DATA TO THE SUMMARY DICT
-                    if point_range not in self.summaries:    # adding relevant data to the summary dict                                 
-                        self.summaries[point_range] = ( [], {} )
-                    fermi_data, score_data = self.summaries[point_range]
-                    
-                    fermi_data.append(fermi_plot)
-
-                    if curr_family not in score_data:
-                        score_data[curr_family] = ( [], [] )
-                    names, scores = score_data[curr_family]
-                    names.append(member)
-                    scores.append(num_correct/eval_set_size)
-
-                # CREATION OF FOLDERS, IF NECESSARY, AND PLOTS FOR THE CURRENT ROUND
-                    self.train_window.set_status('Writing Results to Folders...')    # creating folders as necessary, writing results to folders 
-                    if not os.path.exists(results_folder/point_range):                                                           
-                        os.makedirs(results_folder/point_range)
-                    self.adagraph(plot_list, 6, results_folder/point_range/member, lower_bound=lower_bound, upper_bound=upper_bound)
-        
-        # DISTRIBUTION OF SUMMARY DATA TO APPROPRIATE RESPECTIVE FOLDERS
-        self.train_window.set_status('Distributing Result Summaries...')  
-        for point_range, (fermi_data, score_data) in self.summaries.items(): 
-            self.adagraph(fermi_data, 5, results_folder/point_range/'Fermi Summary.png')
-                
-            with open(results_folder/point_range/'Scores.txt', 'a') as score_file:
-                for family, (names, scores) in score_data.items():
-                    family_header = '{}\n{}\n{}\n'.format('-'*20, family, '-'*20)  # an underlined heading for each family
-                    score_file.write(family_header)   
-
-                    processed_scores = sorted(zip(names, scores), key=lambda x : x[1], reverse=True)  # zip the scores together, then sort them in ascending order by score
-                    processed_scores.append( ('AVERAGE : ', iumsutils.average(scores)) )
-
-                    for name, score in processed_scores:
-                        score_file.write('{} : {}\n'.format(name, score))
-                    score_file.write('\n')   # leave a gap between each family
-        
+        # POST-TRAINING WRAPPING-UP
         self.train_window.button_frame.enable()
         self.train_window.set_status('Finished')
-        
-        runtime = timedelta(seconds=round(time() - start_time))   
-        with open(results_folder/'Training Settings.txt', 'a') as settings_file:
-            settings_file.write('\nTraining Time : {}'.format(runtime))   # log the runtime in the Train Settings file
-        
-        if end_notification:
-            messagebox.showinfo('Training Complete', 'Routine completed successfully\nResults can be found in "Training Results" folders')
-    
+        messagebox.showinfo('Training Complete', 'Routine completed successfully\nResults can be found in "Saved Training Results" folders')
     
     def reset_training(self):
         if self.train_window: # if a window already exists
@@ -575,11 +575,11 @@ class PLATINUMS_App:
             curr_plot.set_title(plot_title)
             
             if plot_type == 's':                 # for plotting spectra
-                curr_plot.plot(range(lower_bound, upper_bound), plot_data, 'k,') 
+                curr_plot.plot(range(lower_bound, upper_bound), plot_data, 'c-') 
                 curr_plot.axis( [lower_bound , upper_bound+1, min(plot_data), max(plot_data)] )
             elif plot_type == 'm':               # for plotting metrics from training
                 line_color = ('Loss' in plot_title and 'r' or 'g')
-                curr_plot.plot(range(1, self.num_epochs + 1), plot_data, line_color) 
+                curr_plot.plot(range(1, len(plot_data) + 1), plot_data, line_color) 
             elif plot_type == 'f':               # for plotting fermi-dirac plots
                 num_AAVs = len(plot_data)
                 curr_plot.plot( range(num_AAVs), plot_data, linestyle='-', color='m')  # normalized by dividing by length
