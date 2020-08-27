@@ -3,9 +3,13 @@ import matplotlib.pyplot as plt
 import numpy as np
 from scipy.signal import savgol_filter
 
-def average(iterable):
+# general use methods to ease may common tasks
+def average(iterable, precision=None):
     '''Calculcate and return average of an iterable'''
-    return sum(iterable)/len(iterable)
+    avg = sum(iterable)/len(iterable)
+    if precision:
+        avg = round(avg, precision)
+    return avg
 
 def standard_dev(iterable):
     '''Calculate the standard deviation of an iterable'''
@@ -40,9 +44,46 @@ def get_family(species):
     for suffix, family in iupac_suffices.items():
         if re.search(f'(?i){suffix}\Z', isolate_species(species)):   #ignore capitalization (particular to ethers), only check end of name (particular to pinac<ol>one)
             return family
+
+def adagraph(plot_list, ncols, save_dir, display_size=20):  # ADD AXIS LABELS, SUBCLASS BUNDLED PLOT OBJECTS
+        '''a general tidy internal graphing utility of my own devising, used to produce all manner of plots during training with one function'''
+        nrows = math.ceil(len(plot_list)/ncols)  #  determine the necessary number of rows needed to accomodate the data
+        fig, axs = plt.subplots(nrows, ncols, figsize=(display_size, display_size * nrows/ncols)) 
         
+        for idx, (plot_data, plot_title, plot_type) in enumerate(plot_list):                         
+            if nrows > 1:                        # locate the current plot, unpack linear index into coordinate
+                row, col = divmod(idx, ncols)      
+                curr_plot = axs[row][col]  
+            else:                                # special case for indexing plots with only one row; my workaround of implementation in matplotlib
+                curr_plot = axs[idx]    
+            curr_plot.set_title(plot_title)
+            
+            # enumerate plot conditions by plot type, plan to generalize this later with a custom class BundledPlot()
+            if plot_type == 's':                 # for plotting spectra
+                curr_plot.plot(*plot_data, 'c-') # unpacking accounts for shift in x-boundaries if RIP trimming is occuring
+            elif plot_type == 'm':               # for plotting metrics from training
+                curr_plot.plot(plot_data, ('Loss' in plot_title and 'r-' or 'g-')) 
+            elif plot_type == 'f':               # for plotting fermi-dirac plots
+                curr_plot.plot(plot_data, 'm-')  
+                curr_plot.set_ylim(0, 1.05)
+            elif plot_type == 'p':               # for plotting predictions
+                curr_plot.bar(*plot_data, color=('Summation' in plot_title and 'r' or 'b'))  # unpacking accounts for column labels by family for predictions
+                curr_plot.set_ylim(0,1)
+                curr_plot.tick_params(axis='x', labelrotation=45)
+            elif plot_type == 'v':               # for plotting variation in noise by family
+                (minima, averages, maxima) = plot_data
+                curr_plot.set_xlabel('Point Number')
+                curr_plot.set_ylabel('Intensity')
+                curr_plot.plot(maxima, 'b-', averages, 'r-', minima, 'g-') 
+                curr_plot.legend(['Maximum', 'Average', 'Minimum'], loc='upper left')
+        plt.tight_layout()
+        plt.savefig(save_dir)
+        plt.close('all')
+        
+        
+# data cleaning and transformation methods-------------------------------------------------------------------------------------------------
 def fourierize(source_file_name):  
-    '''Creates a copy of a PLATIN-UMS-compatible data file with all spectra data replaced by their Discrete Fourier Transforms'''
+    '''Creates a copy of a PLATIN-UMS-compatible data file, with all spectra being replaced by their Discrete Fourier Transforms'''
     dest_file_name = re.sub('.csv', '(FT).csv', source_file_name) # explicit naming for the new file
     with open(source_file_name, 'r') as source_file, open(dest_file_name, 'w', newline='') as dest_file:
         for row in csv.reader(source_file):
@@ -59,42 +100,21 @@ def normalize(file_name, cutoff_value=0.5):  # this method is very much WIP, qua
                 new_row = (instance, *savgol_filter(spectrum, 5, 1))  # create a new row with the filtered data after culling
                 csv.writer(dest_file).writerow(new_row)
 
-def analyze_noise(file_name, ncols=4, display_size=20):
+def analyze_noise(file_name, ncols=4):  # consider making min/avg/max calculations in-place, rather than after reading
     '''Generate a set of plots for all species in a dataset which shows how the baseline noise varies across spectra at each sample point'''
-    spectrum_len = 0
     with open(f'{file_name}.csv', 'r') as source_file:
         data_by_species = {}
         for row in csv.reader(source_file):
             instance, species, spectrum = row[0], isolate_species(row[0]), [float(i) for i in row[1:]]
-            
-            if not spectrum_len:
-                spectrum_len = len(spectrum)
-            
+
             if species not in data_by_species:  # ensure entries exists to avoid KeyError
                 data_by_species[species] = []
             data_by_species[species].append(spectrum)
-     
-    nrows = math.ceil(len(data_by_species)/ncols)  #  determine the necessary number of rows needed to accomodate the data
-    fig, axs = plt.subplots(nrows, ncols, figsize=(display_size, display_size * nrows/ncols))
+    
+    noise_plots = []
+    for species, spectra in data_by_species.items():
+        noise_stats = [tuple(map(funct, zip(*spectra))) for funct in (min, average, max)] # tuple containing the min, avg, and max values across all points in all current species' spectra
+        plot_title = f'S.V. of {species}, ({len(spectra)} instances)'
+        noise_plots.append((noise_stats, plot_title, 'v'))  # bundled plot for the current species
 
-    for idx, (species, spectra) in enumerate(data_by_species.items()):
-        # zip(*spectra) is akin to matrix transposition, gives a list of the values of a single point for every spectra of a species
-        (minima, averages, maxima) = [ tuple( map(funct, zip(*spectra)) ) for funct in (min, average, max)]
-        point_nums = range(spectrum_len)
-        
-        if nrows > 1:                        # locate the current plot, unpack linear index into coordinate
-            row, col = divmod(idx, ncols)      
-            curr_plot = axs[row][col]  
-        else:                                # special case for indexing plots with only one row; my workaround of implementation in matplotlib
-            curr_plot = axs[idx]   
-
-        curr_plot.set_title('Spectral Variation of ' + species)
-        curr_plot.set_xlabel('Point Number')
-        curr_plot.set_ylabel('Intensity')
-        curr_plot.plot(point_nums, maxima, 'b-', label='Maximum')
-        curr_plot.plot(point_nums, averages, 'r-', label='Average')
-        curr_plot.plot(point_nums, minima, 'g-', label='Minimum') 
-        curr_plot.legend(loc='upper left')
-    plt.tight_layout()
-    plt.savefig(f'./Dataset Noise Plots/Spectral Variation by Species, {file_name}')
-    plt.close()
+    adagraph(noise_plots, ncols, f'./Dataset Noise Plots/Spectral Variation by Species, {file_name}')
