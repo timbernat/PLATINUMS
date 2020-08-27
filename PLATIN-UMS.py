@@ -44,7 +44,7 @@ class TkEpochs(Callback):
         if self.tw.end_training:
             self.model.stop_training = True
         
-class TrainingWindow:
+class TrainingWindow():
     '''The window which displays training progress, was easier to subclass outside of the main GUI class'''
     def __init__(self, main, total_rounds, num_epochs, train_funct, reset_funct, train_button):
         self.total_rounds = total_rounds
@@ -54,6 +54,7 @@ class TrainingWindow:
         self.training_window = tk.Toplevel(main)
         self.training_window.title('Training Progress')
         self.training_window.geometry('398x163')
+        self.training_window.attributes('-topmost', True)
         self.end_training = False
         
         # Status Printouts
@@ -131,12 +132,12 @@ class TrainingWindow:
         self.set_readout(self.curr_fam, fam_status)
     
     def set_round_progress(self, curr_round):
-        self.round_label.configure(text='Training Round: {}/{}'.format(curr_round, self.total_rounds) )
+        self.round_label.configure(text=f'Training Round: {curr_round}/{self.total_rounds}')
         self.round_progress.configure(value=curr_round)
         self.main.update()
         
     def set_epoch_progress(self, curr_epoch):
-        self.epoch_label.configure(text='Training Epoch: {}/{}'.format(curr_epoch, self.num_epochs) )
+        self.epoch_label.configure(text=f'Training Epoch: {curr_epoch}/{self.num_epochs}')
         self.epoch_progress.configure(value=curr_epoch)
         self.main.update()
         
@@ -144,13 +145,13 @@ class TrainingWindow:
         self.train_button.configure(state='normal')
         self.training_window.destroy()
         
-# Section 2: Start of code for the actual GUI and application ------------------------------------------------------------------------------------------------------------
+# Section 2: Start of code for the actual GUI and application ---------------------------------------------------------------------------------------
 class PLATINUMS_App:
     def __init__(self, main):
         
         #Main Window
         self.main = main
-        self.main.title('PLATIN-UMS 4.2.7-alpha')
+        self.main.title('PLATIN-UMS 4.2.9-alpha')
         self.main.geometry('445x420')
 
         #Frame 1
@@ -221,7 +222,8 @@ class PLATINUMS_App:
         #General/Misc
         self.frames = (self.data_frame, self.input_frame, self.hyperparam_frame, self.param_frame)
         self.switches = (self.fam_switch, self.stop_switch, self.trim_switch)
-        self.entries = (self.epoch_entry, self.batchsize_entry, self.learnrate_entry, self.n_slice_entry, self.upper_bound_entry, self.slice_decrement_entry, self.lower_bound_entry)
+        self.entries = (self.epoch_entry, self.batchsize_entry, self.learnrate_entry, self.n_slice_entry,
+                        self.upper_bound_entry, self.slice_decrement_entry, self.lower_bound_entry)
         self.arrays = (self.chem_data, self.selections, self.family_mapping, self.hyperparams)
 
         self.exit_button =  tk.Button(self.main, text='Exit', padx=22, pady=22, bg='red', command=self.shutdown)
@@ -271,6 +273,7 @@ class PLATINUMS_App:
         self.families = set()
         
         self.reset_training()  # keras callbacks and summaries, while not in self.arrays, are cleared by this call
+        self.main.lift()
 
                 
     #Frame 1 (Reading) Methods 
@@ -394,11 +397,11 @@ class PLATINUMS_App:
             # FILE MANAGEMENT FOR TRAIN SETTINGS RECORD AND RESULTS FOLDERS
             start_time = time()    # log start of runtime, will re-log if cycling is enabled
             fam_training = self.fam_switch.value    
-            familiar_str = '{}amiliar'.format(fam_training and 'F' or 'Unf')  # some str formatting based on whether the current training type is familiar or unfamiliar
+            familiar_str = f'{(fam_training and "F" or "Unf")}amiliar'  # some str formatting based on whether the current training type is familiar or unfamiliar
             self.train_window.set_familiar_status(familiar_str)
             
-            self.train_window.set_status('Creating Folders...')
-            results_folder = Path('Saved Training Results', 'All Spectra', 'Training Results, {}-epoch {}'.format(self.hyperparams['Number of Epochs'], familiar_str))
+            self.train_window.set_status('Creating Folders...')   # !!!!!!!!!!!!!!REMOVE MODE 1 RESULTS FLAG AFTER THIS TRAINING, ON THURSDAY!!!!!!!!!!!!!!!!!!
+            results_folder = Path('Saved Training Results', f'{str(self.chosen_file.get())[:-4]} Results', f'{self.hyperparams["Number of Epochs"]}-epoch {familiar_str}')
             if os.path.exists(results_folder):   # prompt user to overwrite file if one already exists
                 if messagebox.askyesno('Duplicates Found', 'Folder with same data settings found;\nOverwrite old folder?'):
                     rmtree(results_folder, ignore_errors=True)
@@ -408,9 +411,10 @@ class PLATINUMS_App:
             os.makedirs(results_folder)
 
             with open(results_folder/'Training Settings.txt', 'a') as settings_file:  # make these variables more compact at some point
-                settings_file.write('Familiar Training : {}\n'.format(fam_training))
+                settings_file.write(f'Source File : {self.chosen_file.get()}\n\n')
+                settings_file.write(f'Familiar Training : {fam_training}\n')
                 for hyperparam, value in self.hyperparams.items():
-                    settings_file.write('{} : {}\n'.format(hyperparam, value))
+                    settings_file.write(f'{hyperparam} : {value}\n')
             
             for instance, member in enumerate(self.selections):         # iterate over all selected species
                 for select_RIP in range(1 + int(self.trim_switch.value)):   # if trimming is enabled, will re-cycle through with trimming
@@ -418,13 +422,12 @@ class PLATINUMS_App:
                     # INITIALIZATION OF SOME INFORMATION REGARDING THE CURRENT ROUND
                         self.train_window.set_status('Training...')
                         curr_family = iumsutils.get_family(member)
-
                         current_round += 1
                         self.train_window.set_round_progress(current_round)
 
                         if select_RIP:
                             lower_bound, upper_bound = self.trimming_min, self.trimming_max - self.slice_decrement*segment
-                            point_range = 'Points {}-{}'.format(lower_bound, upper_bound)
+                            point_range = f'Points {lower_bound}-{upper_bound}'
                         else:
                             lower_bound, upper_bound =  0, self.spectrum_size
                             point_range = 'Full Spectra'
@@ -446,22 +449,21 @@ class PLATINUMS_App:
                                 if eval_set_size <= num_spectra:  # add sample spectra to the list of plots up to the number assigned
                                     plot_list.append((data, instance, 's'))
 
-                            if iumsutils.isolate_species(instance) != member or fam_training:  # add any instance to the training set, unless its a member                                    
+                            if iumsutils.isolate_species(instance) != member or fam_training:  # add any instance to the training set, unless its a member
                                 train_set_size += 1                                       # of the current species and unfamiliar trainin is enabled
                                 features.append(data)
                                 labels.append(vector)
                                 occurrences[iumsutils.get_family(instance)] += 1
 
-                        self.train_window.set_member( '{} ({} instances found)'.format(member, eval_set_size) )                      
+                        self.train_window.set_member(f'{member} ({eval_set_size} instances found)')                      
                         x_train, x_test, y_train, y_test = train_test_split(np.array(features), np.array(labels), test_size=0.2)                     
 
-                        if verbosity:   # optional printout, gives overview of the training data and the model settings
-                            for (x, y, group) in ( (x_train, y_train, 'training'), (x_test, y_test, 'test') ):
-                                print('{} features/labels in {} set ({} of the data)'.format(
-                                      (x.shape[0], y.shape[0]), group, round(100 * x.shape[0]/train_set_size, 2)) )
-                            print('\n{} features total. Of the {} instances in training dataset:'.format(len(self.chem_data), train_set_size) )
+                        if verbosity:   # optional printout to console, gives overview of the training data and the model settings
+                            for (x, y, group) in ((x_train, y_train, "training"), (x_test, y_test, "test")):
+                                print(f'{x.shape[0]} features & {y.shape[0]} labels in {group} set ({round(100*x.shape[0]/train_set_size, 2)}% of the data)')
+                            print(f'\n{len(self.chem_data)} features total. Of the {train_set_size} instances in training dataset:')
                             for family in self.family_mapping.keys():
-                                print('    {}% of data are {}'.format( round(100 * occurrences[family]/train_set_size, 2), family) )
+                                print(f'\t{round(100*occurrences[family]/train_set_size, 2)}% of data are {family}')
 
                     # MODEL CREATION AND TRAINING
                         with tf.device('CPU:0'):     # eschews the requirement for a brand-new NVIDIA graphics card (which we don't have anyways)                      
@@ -480,7 +482,7 @@ class PLATINUMS_App:
                         test_loss, test_acc = model.evaluate(x_test, y_test, verbose=(verbosity and 2 or 0))  # keras' self evaluation of loss and accuracy metrics
 
                         if self.train_window.end_training:  # condition to escape training loop of training is aborted
-                            messagebox.showerror('Training has Stopped', 'Training aborted by user;\nProceed from Progress Window')
+                            messagebox.showerror('Training has Stopped!', 'Training aborted by user;\nProceed from Progress Window')
                             self.train_window.button_frame.enable()
                             return     # without this, aborting training only pauses one iteration of loop
 
@@ -501,7 +503,7 @@ class PLATINUMS_App:
                     # PACKAGING OF ALL PLOTS, APART FROM THE EVALUATION SPECTRA
                         loss_plot = (hist.history['loss'], 'Training Loss (Final = %0.2f)' % test_loss, 'm') 
                         accuracy_plot = (hist.history['accuracy'], 'Training Accuracy (Final = %0.2f%%)' % (100 * test_acc), 'm') 
-                        fermi_plot = (fermi_data, '{}, {}/{} correct'.format(member, num_correct, eval_set_size), 'f')  
+                        fermi_plot = (fermi_data, f'{member}, {num_correct}/{eval_set_size} correct', 'f')  
                         summation_plot = ([iumsutils.average(column) for column in zip(*predictions)], 'Standardized Summation', 'p')
                         prediction_plots =  zip(predictions, eval_titles, tuple('p' for i in predictions))   # all the prediction plots                    
 
@@ -519,7 +521,7 @@ class PLATINUMS_App:
                             score_data[curr_family] = ( [], [] )
                         names, scores = score_data[curr_family]
                         names.append(member)
-                        scores.append(num_correct/eval_set_size)
+                        scores.append(round(num_correct/eval_set_size, 4))
 
                     # CREATION OF FOLDERS, IF NECESSARY, AND PLOTS FOR THE CURRENT ROUND
                         self.train_window.set_status('Writing Results to Folders...')    # creating folders as necessary, writing results to folders 
@@ -534,24 +536,25 @@ class PLATINUMS_App:
 
                 with open(results_folder/point_range/'Scores.txt', 'a') as score_file:
                     for family, (names, scores) in score_data.items():
-                        family_header = '{}\n{}\n{}\n'.format('-'*20, family, '-'*20)  # an underlined heading for each family
+                        family_header = f'{"-"*20}\n{family}\n{"-"*20}\n'  # an underlined heading for each family
                         score_file.write(family_header)   
 
-                        processed_scores = sorted(zip(names, scores), key=lambda x : x[1], reverse=True)  # zip the scores together, then sort them in ascending order by score
+                        processed_scores = sorted(zip(names, scores), key=lambda x : x[1], reverse=True)  # zip scores together and sort in ascending order by score
                         processed_scores.append( ('AVERAGE : ', iumsutils.average(scores)) )
 
                         for name, score in processed_scores:
-                            score_file.write('{} : {}\n'.format(name, score))
+                            score_file.write(f'{name} : {score}\n')
                         score_file.write('\n')   # leave a gap between each family
             
             with open(results_folder/'Training Settings.txt', 'a') as settings_file:  # log the training time in the Train Settings file
                 runtime = timedelta(seconds=round(time() - start_time))
-                settings_file.write('\nTraining Time : {}'.format(runtime))   
+                settings_file.write(f'\nTraining Time : {runtime}')   
         
         # POST-TRAINING WRAPPING-UP
         self.train_window.button_frame.enable()
         self.train_window.set_status('Finished')
-        messagebox.showinfo('Training Complete', 'Routine completed successfully\nResults can be found in "Saved Training Results" folders')
+        messagebox.showinfo('Training Completed Succesfully!', f'Training results can be found in folder:\n{results_folder.parents[0]}',
+                            parent=self.train_window.training_window)  # ensure the message originates from the training window's root
     
     def reset_training(self):
         if self.train_window: # if a window already exists
@@ -575,18 +578,14 @@ class PLATINUMS_App:
             curr_plot.set_title(plot_title)
             
             if plot_type == 's':                 # for plotting spectra
-                curr_plot.plot(range(lower_bound, upper_bound), plot_data, 'c-') 
-                curr_plot.axis( [lower_bound , upper_bound+1, min(plot_data), max(plot_data)] )
+                curr_plot.plot(range(lower_bound, lower_bound+len(plot_data)), plot_data, 'c-') 
             elif plot_type == 'm':               # for plotting metrics from training
-                line_color = ('Loss' in plot_title and 'r' or 'g')
-                curr_plot.plot(range(1, len(plot_data) + 1), plot_data, line_color) 
+                curr_plot.plot(plot_data, ('Loss' in plot_title and 'r-' or 'g-')) 
             elif plot_type == 'f':               # for plotting fermi-dirac plots
-                num_AAVs = len(plot_data)
-                curr_plot.plot( range(num_AAVs), plot_data, linestyle='-', color='m')  # normalized by dividing by length
-                curr_plot.axis( [0, num_AAVs, 0, 1.05] )
+                curr_plot.plot(plot_data, 'm-')  
+                curr_plot.set_ylim(0, 1.05)
             elif plot_type == 'p':               # for plotting predictions
-                bar_color = ('Summation' in plot_title and 'r' or 'b')
-                curr_plot.bar( self.family_mapping.keys(), plot_data, color=bar_color)  
+                curr_plot.bar( self.family_mapping.keys(), plot_data, color=('Summation' in plot_title and 'r' or 'b'))  
                 curr_plot.set_ylim(0,1)
                 curr_plot.tick_params(axis='x', labelrotation=45)
         plt.tight_layout()
