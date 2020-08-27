@@ -155,7 +155,7 @@ class PLATINUMS_App:
         self.main.geometry('445x420')
 
         #Frame 1
-        self.data_frame = ttl.ToggleFrame(self.main, 'Select CSV to Read: ', padx=21, pady=5, row=0)
+        self.data_frame = ttl.ToggleFrame(self.main, 'Select CSV to Read: ', padx=21, pady=5)
         self.chosen_file = tk.StringVar()
         self.chem_data = {}
         self.all_species = set()
@@ -530,12 +530,12 @@ class PLATINUMS_App:
                         self.train_window.set_status('Writing Results to Folders...')    # creating folders as necessary, writing results to folders 
                         if not os.path.exists(results_folder/point_range):                                                           
                             os.makedirs(results_folder/point_range)
-                        self.adagraph(plot_list, 6, results_folder/point_range/member)
+                        iumsutils.adagraph(plot_list, 6, results_folder/point_range/member)
         
             # DISTRIBUTION OF SUMMARY DATA TO APPROPRIATE RESPECTIVE FOLDERS
             self.train_window.set_status('Distributing Result Summaries...')  
             for point_range, (fermi_data, score_data) in self.summaries.items(): 
-                self.adagraph(fermi_data, 5, results_folder/point_range/'Fermi Summary.png')
+                iumsutils.adagraph(fermi_data, 5, results_folder/point_range/'Fermi Summary.png')
 
                 with open(results_folder/point_range/'Scores.txt', 'a') as score_file:
                     for family, (names, scores) in score_data.items():
@@ -565,35 +565,7 @@ class PLATINUMS_App:
             self.train_window = None
         self.summaries.clear()
         self.keras_callbacks.clear()
-    
-    def adagraph(self, plot_list, ncols, save_dir, display_size=20):  # ADD AXIS LABELS AND ELIMINATE BOUNDS/CLASS REFERENCES
-        '''a general tidy internal graphing utility of my own devising, used to produce all manner of plots during training with one function'''
-        nrows = math.ceil(len(plot_list)/ncols)  #  determine the necessary number of rows needed to accomodate the data
-        fig, axs = plt.subplots(nrows, ncols, figsize=(display_size, display_size * nrows/ncols)) 
         
-        for idx, (plot_data, plot_title, plot_type) in enumerate(plot_list):                         
-            if nrows > 1:                        # locate the current plot, unpack linear index into coordinate
-                row, col = divmod(idx, ncols)      
-                curr_plot = axs[row][col]  
-            else:                                # special case for indexing plots with only one row; my workaround of implementation in matplotlib
-                curr_plot = axs[idx]    
-            curr_plot.set_title(plot_title)
-            
-            if plot_type == 's':                 # for plotting spectra
-                #curr_plot.plot(range(lower_bound, lower_bound+len(plot_data)), plot_data, 'c-') 
-                curr_plot.plot(*plot_data, 'c-')
-            elif plot_type == 'm':               # for plotting metrics from training
-                curr_plot.plot(plot_data, ('Loss' in plot_title and 'r-' or 'g-')) 
-            elif plot_type == 'f':               # for plotting fermi-dirac plots
-                curr_plot.plot(plot_data, 'm-')  
-                curr_plot.set_ylim(0, 1.05)
-            elif plot_type == 'p':               # for plotting predictions
-                curr_plot.bar(*plot_data, color=('Summation' in plot_title and 'r' or 'b'))  
-                curr_plot.set_ylim(0,1)
-                curr_plot.tick_params(axis='x', labelrotation=45)
-        plt.tight_layout()
-        plt.savefig(save_dir)
-        plt.close('all')
 
 if __name__ == '__main__':        
     main_window = tk.Tk()
