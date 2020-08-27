@@ -282,20 +282,19 @@ class PLATINUMS_App:
         Returns the read data (with vector) and sorted lists of the species and families found in the data'''
         with open(self.chosen_file.get(), 'r') as file:
             for row in csv.reader(file):
-                instance = row[0]
-                spectrum_data = [float(i) for i in row[1:]]  # convert data point from str to floats
+                instance, curr_species, spectrum = row[0], iumsutils.isolate_species(row[0]), [float(i) for i in row[1:]]
                 
-                self.chem_data[instance] = spectrum_data
-                self.all_species.add( iumsutils.isolate_species(instance) )
-                self.families.add( iumsutils.get_family(instance) )
+                self.chem_data[instance] = spectrum
+                self.all_species.add(curr_species)
+                self.families.add(iumsutils.get_family(instance))
                 if not self.spectrum_size:
-                    self.spectrum_size = len(spectrum_data)
+                    self.spectrum_size = len(spectrum)
 
         self.upper_bound_entry.set_value(self.spectrum_size)
         self.all_species, self.families = sorted(self.all_species), sorted(self.families)  # sort and convert to lists
         
         for index, family in enumerate(self.families):
-            one_hot_vector = tuple(i == index and 1 or 0 for i in range(len(self.families)) )
+            one_hot_vector = tuple(int(i == family) for i in self.families)
             self.family_mapping[family] = one_hot_vector
                                    
         for instance, data in self.chem_data.items():  # add mapping vector to all data entries
@@ -435,7 +434,7 @@ class PLATINUMS_App:
 
                     # EVALUATION AND TRAINING SET SELECTION AND SPLITTING 
                         plot_list = []
-                        eval_data, eval_titles = [], []
+                        eval_data, eval_titles = [], [] # the first plot, after results are produced, will be the summation plot
                         features, labels, occurrences = [], [], Counter()
                         train_set_size, eval_set_size = 0, 0
 
@@ -447,7 +446,7 @@ class PLATINUMS_App:
                                 eval_titles.append(instance)
 
                                 if eval_set_size <= num_spectra:  # add sample spectra to the list of plots up to the number assigned
-                                    plot_list.append((data, instance, 's'))
+                                    plot_list.append( ((range(lower_bound, upper_bound), data), instance, 's'))
 
                             if iumsutils.isolate_species(instance) != member or fam_training:  # add any instance to the training set, unless its a member
                                 train_set_size += 1                                       # of the current species and unfamiliar trainin is enabled
@@ -497,17 +496,21 @@ class PLATINUMS_App:
 
                             if max(prediction) == target:
                                 num_correct += 1
+                                
                         targets.sort(reverse=True)
                         fermi_data = [AAV/max(targets) for AAV in targets]
+                        
 
                     # PACKAGING OF ALL PLOTS, APART FROM THE EVALUATION SPECTRA
                         loss_plot = (hist.history['loss'], 'Training Loss (Final = %0.2f)' % test_loss, 'm') 
                         accuracy_plot = (hist.history['accuracy'], 'Training Accuracy (Final = %0.2f%%)' % (100 * test_acc), 'm') 
                         fermi_plot = (fermi_data, f'{member}, {num_correct}/{eval_set_size} correct', 'f')  
-                        summation_plot = ([iumsutils.average(column) for column in zip(*predictions)], 'Standardized Summation', 'p')
-                        prediction_plots =  zip(predictions, eval_titles, tuple('p' for i in predictions))   # all the prediction plots                    
-
-                        for plot in (loss_plot, accuracy_plot, fermi_plot, summation_plot, *prediction_plots): 
+                        
+                        predictions.insert(0, [iumsutils.average(column) for column in zip(*predictions)]) # prepend standardized sum of predictions to predictions
+                        eval_titles.insert(0, 'Standardized Summation') # prepend label to the above list to the titles list
+                        prediction_plots = [((self.family_mapping.keys(), prediction), eval_titles[i], 'p') for i, prediction in enumerate(predictions)]  
+                            
+                        for plot in (loss_plot, accuracy_plot, fermi_plot, *prediction_plots): # collate together the plot data tuples (will implement as objects)
                             plot_list.append(plot)    
 
                     # ORGANIZATION AND ADDITION OF RELEVANT DATA TO THE SUMMARY DICT
@@ -527,7 +530,7 @@ class PLATINUMS_App:
                         self.train_window.set_status('Writing Results to Folders...')    # creating folders as necessary, writing results to folders 
                         if not os.path.exists(results_folder/point_range):                                                           
                             os.makedirs(results_folder/point_range)
-                        self.adagraph(plot_list, 6, results_folder/point_range/member, lower_bound=lower_bound, upper_bound=upper_bound)
+                        self.adagraph(plot_list, 6, results_folder/point_range/member)
         
             # DISTRIBUTION OF SUMMARY DATA TO APPROPRIATE RESPECTIVE FOLDERS
             self.train_window.set_status('Distributing Result Summaries...')  
@@ -563,10 +566,9 @@ class PLATINUMS_App:
         self.summaries.clear()
         self.keras_callbacks.clear()
     
-    def adagraph(self, plot_list, ncols, save_dir, lower_bound=None, upper_bound=None):  # ADD AXIS LABELS AND ELIMINATE BOUNDS/CLASS REFERENCES
+    def adagraph(self, plot_list, ncols, save_dir, display_size=20):  # ADD AXIS LABELS AND ELIMINATE BOUNDS/CLASS REFERENCES
         '''a general tidy internal graphing utility of my own devising, used to produce all manner of plots during training with one function'''
         nrows = math.ceil(len(plot_list)/ncols)  #  determine the necessary number of rows needed to accomodate the data
-        display_size = 20                        # 20 seems to be good size for jupyter viewing
         fig, axs = plt.subplots(nrows, ncols, figsize=(display_size, display_size * nrows/ncols)) 
         
         for idx, (plot_data, plot_title, plot_type) in enumerate(plot_list):                         
@@ -578,14 +580,15 @@ class PLATINUMS_App:
             curr_plot.set_title(plot_title)
             
             if plot_type == 's':                 # for plotting spectra
-                curr_plot.plot(range(lower_bound, lower_bound+len(plot_data)), plot_data, 'c-') 
+                #curr_plot.plot(range(lower_bound, lower_bound+len(plot_data)), plot_data, 'c-') 
+                curr_plot.plot(*plot_data, 'c-')
             elif plot_type == 'm':               # for plotting metrics from training
                 curr_plot.plot(plot_data, ('Loss' in plot_title and 'r-' or 'g-')) 
             elif plot_type == 'f':               # for plotting fermi-dirac plots
                 curr_plot.plot(plot_data, 'm-')  
                 curr_plot.set_ylim(0, 1.05)
             elif plot_type == 'p':               # for plotting predictions
-                curr_plot.bar( self.family_mapping.keys(), plot_data, color=('Summation' in plot_title and 'r' or 'b'))  
+                curr_plot.bar(*plot_data, color=('Summation' in plot_title and 'r' or 'b'))  
                 curr_plot.set_ylim(0,1)
                 curr_plot.tick_params(axis='x', labelrotation=45)
         plt.tight_layout()
