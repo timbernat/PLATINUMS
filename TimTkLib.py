@@ -1,8 +1,8 @@
 '''Some Custom widget classes I've defined to make working with tkinter a bit more palatable.
 Widgets, in the order they appear, are ConfirmButton, StatusBox, DynOptionMenu, ToggleFrame, 
-LabelledEntry, Switch, GroupableCheck, CheckPanel, and SelectionWindow'''
-
+NumberedProgBar, LabelledEntry, Switch, GroupableCheck, CheckPanel, and SelectionWindow'''
 import tkinter as tk
+import tkinter.ttk as ttk
 import math # needed for ceiling function
 
 
@@ -60,7 +60,34 @@ class DynOptionMenu:
             self.contents.add_command(label=option, command=lambda x=option: self.var.set(x))
         self.reset_default()
         
+class NumberedProgBar():
+    '''Progress bar which displays the numerical proportion complete (out of the set total) in the middle of the bar'''
+    def __init__(self, frame, total, default=0, length=240, row=0, col=0, cs=1):
+        self.curr_val = None
+        self.total = total
+        self.style = ttk.Style(frame)
+        self.style.layout('text.Horizontal.TProgressbar', 
+             [('Horizontal.Progressbar.trough', {'children': [('Horizontal.Progressbar.pbar', {'side': 'left', 'sticky': 'ns'})],'sticky': 'nswe'}), 
+              ('Horizontal.Progressbar.label', {'sticky': ''})]) # this label here modifies the style to allow for text overlay
+        self.prog_bar = ttk.Progressbar(frame, style='text.Horizontal.TProgressbar', orient='horizontal', length=length, maximum=total)
+        self.prog_bar.grid(row=row, column=col, columnspan=cs)
+        self.set_progress(default)
         
+    def set_progress(self, val):
+        if val > self.total:
+            raise ValueError # ensure that the progressbar is not set betond the total
+        else:
+            self.curr_val = val
+            self.prog_bar.configure(value=self.curr_val)
+            self.style.configure('text.Horizontal.TProgressbar', text=f'{self.curr_val}/{self.total}')
+        
+    def increment(self):
+        if self.curr_val == self.total:
+            return # don't increment when full
+        else:
+            self.set_progress(self.curr_val+1)  
+
+
 class ToggleFrame(tk.LabelFrame):
     '''A frame whose contents can be easily disabled or enabled, If starting disabled, must put "self.disable()"
     AFTER all widgets have been added to the frame'''
