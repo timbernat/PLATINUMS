@@ -1,7 +1,7 @@
 # GUI imports
 import tkinter as tk
 from tkinter import messagebox
-from tkinter.ttk import Progressbar
+from tkinter.ttk import Progressbar, Style
 
 # Custom Imports
 import iumsutils           # library of functions specific to my "-IUMS" class of IMS Neural Network applications
@@ -32,15 +32,16 @@ from sklearn.model_selection import train_test_split
 
 # SECTION 1 : custom classes needed to operate some features of the main GUI  ---------------------------------------------------                   
 class TkEpochs(Callback):   
-    '''A custom keras Callback to display the current epoch in the training progress window'''
+    '''A custom keras Callback which mediates interaction between the training window and the model training/Keras'''
     def __init__(self, train_window):
         super(TkEpochs, self).__init__()
         self.tw = train_window
     
-    def on_epoch_begin(self, epoch, logs=None):
+    def on_epoch_begin(self, epoch, logs=None): # update the epoch progress bar at the start of each epoch
+        #self.tw.epoch_progress.increment()
         self.tw.set_epoch_progress(epoch + 1)
         
-    def on_epoch_end(self, epoch, logs=None):  
+    def on_epoch_end(self, epoch, logs=None):  # abort training if the abort flag has been raised by the training window
         if self.tw.end_training:
             self.model.stop_training = True
         
@@ -53,12 +54,12 @@ class TrainingWindow():
         self.train_button = train_button
         self.training_window = tk.Toplevel(main)
         self.training_window.title('Training Progress')
-        self.training_window.geometry('398x163')
+        self.training_window.geometry('390x163')
         self.training_window.attributes('-topmost', True)
         self.end_training = False
         
         # Status Printouts
-        self.status_frame = tk.Frame(self.training_window, bd=2, padx=13, relief='groove')
+        self.status_frame = tk.Frame(self.training_window, bd=2, padx=20, relief='groove')
         self.status_frame.grid(row=0, column=0)
         
         self.member_label =   tk.Label(self.status_frame, text='Current Species: ')
@@ -67,10 +68,10 @@ class TrainingWindow():
         self.curr_slice =     tk.Label(self.status_frame)
         self.fam_label =      tk.Label(self.status_frame, text='Training Type: ')
         self.curr_fam =       tk.Label(self.status_frame)
-        self.round_label =    tk.Label(self.status_frame)
-        self.round_progress = Progressbar(self.status_frame, orient='horizontal', length=240, maximum=total_rounds)
-        self.epoch_label =    tk.Label(self.status_frame)
-        self.epoch_progress = Progressbar(self.status_frame, orient='horizontal', length=240, maximum=num_epochs) 
+        self.round_label =    tk.Label(self.status_frame, text='Training Round: ')
+        self.round_progress = ttl.NumberedProgBar(self.status_frame, total_rounds, row=3, col=1)
+        self.epoch_label =    tk.Label(self.status_frame, text='Training Epoch: ')
+        self.epoch_progress = ttl.NumberedProgBar(self.status_frame, num_epochs, style_num=2, row=4, col=1) 
         self.status_label =   tk.Label(self.status_frame, text='Current Status: ')
         self.curr_status =    tk.Label(self.status_frame)
         
@@ -81,9 +82,9 @@ class TrainingWindow():
         self.fam_label.grid(     row=2, column=0)
         self.curr_fam.grid(      row=2, column=1, sticky='w')
         self.round_label.grid(   row=3, column=0)
-        self.round_progress.grid(row=3, column=1, sticky='w')
+        #self.round_progress, like all ttl widgets, has gridding built in
         self.epoch_label.grid(   row=4, column=0)
-        self.epoch_progress.grid(row=4, column=1, sticky='w')
+        #self.epoch_progress, like all ttl widgets, has gridding built in
         self.status_label.grid(  row=5, column=0)
         self.curr_status.grid(   row=5, column=1, sticky='w')
         
@@ -132,13 +133,11 @@ class TrainingWindow():
         self.set_readout(self.curr_fam, fam_status)
     
     def set_round_progress(self, curr_round):
-        self.round_label.configure(text=f'Training Round: {curr_round}/{self.total_rounds}')
-        self.round_progress.configure(value=curr_round)
+        self.round_progress.set_progress(curr_round)
         self.main.update()
         
     def set_epoch_progress(self, curr_epoch):
-        self.epoch_label.configure(text=f'Training Epoch: {curr_epoch}/{self.num_epochs}')
-        self.epoch_progress.configure(value=curr_epoch)
+        self.epoch_progress.set_progress(curr_epoch)
         self.main.update()
         
     def destroy(self):
@@ -151,7 +150,7 @@ class PLATINUMS_App:
         
         #Main Window
         self.main = main
-        self.main.title('PLATIN-UMS 4.2.9-alpha')
+        self.main.title('PLATIN-UMS 4.3.2-alpha')
         self.main.geometry('445x420')
 
         #Frame 1
@@ -231,12 +230,11 @@ class PLATINUMS_App:
         self.exit_button.grid(row=0, column=4)
         self.reset_button.grid(row=4, column=4)
         
-        self.train_button = tk.Button(self.main, text='TRAIN', padx=20, width=45, bg='dodger blue', state='disabled', command=self.begin_training)
+        self.train_button = tk.Button(self.main, text='TRAIN', padx=20, width=45, bg='dodger blue', state='disabled', command=self.training)
         self.train_button.grid(row=4, column=0)
         self.train_window = None
         self.summaries = {}
-
-    
+        
     #General Methods
     def isolate(self, on_frame):
         '''Enable just one frame.'''
@@ -324,7 +322,7 @@ class PLATINUMS_App:
 
     def confirm_inputs(self):
         '''Confirm species input selections'''
-        if self.selections == []:
+        if not self.selections: # if self.selections == []:
             messagebox.showerror('No selections made', 'Please select species to evaluate')
         else:
             if self.read_mode.get() == 'By Family':  # pick out species by family if selection by family is made
@@ -370,24 +368,22 @@ class PLATINUMS_App:
                 self.train_button.configure(state='normal')
         
         
-    #Training and Neural Net-Specific Methods    
-    def begin_training(self):
+    # Section 2A: the training routine itself, along with a dedicated reset method to avoid overwrites between subsequent trainings
+    def training(self, num_spectra=2, verbosity=False):
+        '''The neural net training function itself; this is where the fun happens'''
         total_rounds = len(self.selections)
-        if self.trim_switch.value:  #if RIP trimming is enabled
+        if self.trim_switch.value:  # if RIP trimming is enabled
             total_rounds += len(self.selections)*self.num_slices
-        if self.cycle_fams.get():    #if familiar cycling is enabled
+        if self.cycle_fams.get():   # if familiar cycling is enabled
             total_rounds *= 2
 
-        self.reset_training()
-        self.train_button.configure(state='disabled')
-        self.train_window = TrainingWindow(self.main, total_rounds, self.hyperparams['Number of Epochs'], self.begin_training, self.reset, self.train_button)
+        # PRE-TRAINING PREPARATIONS TO ENSURE INTERFACE CONTINUITY
+        self.reset_training()  # ensure no previous training states are kept before beginning (applies to retrain option specifically)
+        self.train_button.configure(state='disabled') # disable training button while training for idiot-proofing purposes
+        self.train_window = TrainingWindow(self.main, total_rounds, self.hyperparams['Number of Epochs'], self.training, self.reset, self.train_button)
         self.keras_callbacks.append(TkEpochs(self.train_window))
-        self.training()
-     
-    # Section 2A: the training routine code itself 
-    def training(self, num_spectra=2, verbosity=False):
-        '''The neural net training function itself'''
-        current_round = 0      # initialize dummy round counter at round 0
+        
+        # ACTUAL TRAINING CYCLE BEGINS
         for familiar_cycling in range(1 + self.cycle_fams.get()):  # if cycling is enabled, run throught the training twice, toggling familiar status in between      
             if familiar_cycling:
                 self.fam_switch.toggle()  # toggle the unfamiliar status the second time through (only occurs if cycling is enabled)
@@ -399,7 +395,7 @@ class PLATINUMS_App:
             familiar_str = f'{(fam_training and "F" or "Unf")}amiliar'  # some str formatting based on whether the current training type is familiar or unfamiliar
             self.train_window.set_familiar_status(familiar_str)
             
-            self.train_window.set_status('Creating Folders...')   # !!!!!!!!!!!!!!REMOVE MODE 1 RESULTS FLAG AFTER THIS TRAINING, ON THURSDAY!!!!!!!!!!!!!!!!!!
+            self.train_window.set_status('Creating Folders...') 
             results_folder = Path('Saved Training Results', f'{str(self.chosen_file.get())[:-4]} Results', f'{self.hyperparams["Number of Epochs"]}-epoch {familiar_str}')
             if os.path.exists(results_folder):   # prompt user to overwrite file if one already exists
                 if messagebox.askyesno('Duplicates Found', 'Folder with same data settings found;\nOverwrite old folder?'):
@@ -415,14 +411,14 @@ class PLATINUMS_App:
                 for hyperparam, value in self.hyperparams.items():
                     settings_file.write(f'{hyperparam} : {value}\n')
             
-            for instance, member in enumerate(self.selections):         # iterate over all selected species
+            # INNER LAYERS OF TRAINING LOOP
+            for member in self.selections:         # iterate over all selected species
                 for select_RIP in range(1 + int(self.trim_switch.value)):   # if trimming is enabled, will re-cycle through with trimming
                     for segment in range(select_RIP and self.num_slices or 1):  # perform as many slices as are specified (with no trimming, just 1)
                     # INITIALIZATION OF SOME INFORMATION REGARDING THE CURRENT ROUND
                         self.train_window.set_status('Training...')
                         curr_family = iumsutils.get_family(member)
-                        current_round += 1
-                        self.train_window.set_round_progress(current_round)
+                        self.train_window.round_progress.increment() # increment round progress
 
                         if select_RIP:
                             lower_bound, upper_bound = self.trimming_min, self.trimming_max - self.slice_decrement*segment
@@ -466,9 +462,9 @@ class PLATINUMS_App:
 
                     # MODEL CREATION AND TRAINING
                         with tf.device('CPU:0'):     # eschews the requirement for a brand-new NVIDIA graphics card (which we don't have anyways)                      
-                            model = Sequential()                              # model block is created, layers are created/added in this block
-                            model.add(Dense(512, input_dim=(upper_bound - lower_bound), activation='relu'))  # 512 neuron input layer
-                            model.add(Dropout(0.5))                                    # dropout layer, to reduce overfit
+                            model = Sequential()     # model block is created, layers are added to this block
+                            model.add(Dense(512, input_dim=(upper_bound - lower_bound), activation='relu'))  # 512 neuron input layer, size depends on trimming
+                            #model.add(Dropout(0.5))                                    # dropout layer, to reduce overfit
                             model.add(Dense(512, activation='relu'))                   # 512 neuron hidden layer
                             model.add(Dense(len(self.families), activation='softmax')) # softmax gives prob. dist. of identity over all families
                             model.compile(loss='categorical_crossentropy', optimizer=Adam(lr=self.hyperparams['Learn Rate']), metrics=['accuracy']) 
