@@ -62,16 +62,25 @@ class DynOptionMenu:
         
 class NumberedProgBar():
     '''Progress bar which displays the numerical proportion complete (out of the set total) in the middle of the bar'''
-    def __init__(self, frame, total, default=0, length=240, row=0, col=0, cs=1):
+    def __init__(self, frame, total, default=0, style_num=1, length=240, row=0, col=0, cs=1):
         self.curr_val = None
+        self.default = default
         self.total = total
         self.style = ttk.Style(frame)
-        self.style.layout('text.Horizontal.TProgressbar', 
-             [('Horizontal.Progressbar.trough', {'children': [('Horizontal.Progressbar.pbar', {'side': 'left', 'sticky': 'ns'})],'sticky': 'nswe'}), 
-              ('Horizontal.Progressbar.label', {'sticky': ''})]) # this label here modifies the style to allow for text overlay
-        self.prog_bar = ttk.Progressbar(frame, style='text.Horizontal.TProgressbar', orient='horizontal', length=length, maximum=total)
+        
+        self.style_name = f'text.Horizontal.TProgressbar{style_num}'
+        self.style.layout(self.style_name, 
+             [('Horizontal.Progressbar.trough', {'children': [('Horizontal.Progressbar.pbar', {'side': 'left', 'sticky': 'ns'})],
+                                                 'sticky': 'nswe'}),
+              ('Horizontal.Progressbar.label', {'sticky': ''})]) 
+        
+        #s.layout("LabeledProgressbar",
+             #[('LabeledProgressbar.trough', {'children': [('LabeledProgressbar.pbar',{'side': 'left', 'sticky': 'ns'}),("LabeledProgressbar.label",{"sticky": ""})]
+                                             #,'sticky': 'nswe'})])
+        
+        self.prog_bar = ttk.Progressbar(frame, style=self.style_name, orient='horizontal', length=length, maximum=total)
         self.prog_bar.grid(row=row, column=col, columnspan=cs)
-        self.set_progress(default)
+        self.reset()
         
     def set_progress(self, val):
         if val > self.total:
@@ -79,13 +88,16 @@ class NumberedProgBar():
         else:
             self.curr_val = val
             self.prog_bar.configure(value=self.curr_val)
-            self.style.configure('text.Horizontal.TProgressbar', text=f'{self.curr_val}/{self.total}')
+            self.style.configure(self.style_name, text=f'{self.curr_val}/{self.total}')
         
     def increment(self):
         if self.curr_val == self.total:
             return # don't increment when full
         else:
-            self.set_progress(self.curr_val+1)  
+            self.set_progress(self.curr_val+1) 
+            
+    def reset(self):
+        self.set_progress(self.default)
 
 
 class ToggleFrame(tk.LabelFrame):
