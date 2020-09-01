@@ -1,31 +1,29 @@
-# GUI imports
-import tkinter as tk
-from tkinter import messagebox
-from tkinter.ttk import Progressbar, Style
-
 # Custom Imports
 import iumsutils           # library of functions specific to my "-IUMS" class of IMS Neural Network applications
 import TimTkLib as ttl     # library of custom tkinter widgets I've written to make GUI assembly more straightforward 
 
 # Built-in Imports
-import csv, math, os, re
+import csv, os, re
 from time import time                      
 from datetime import timedelta
 from pathlib import Path
 from shutil import rmtree
 from collections import Counter
 
- # PIP-installed Imports                
-import numpy as np
+import tkinter as tk    # Built-In GUI imports
+from tkinter import messagebox
+from tkinter.ttk import Progressbar, Style
 
-# Neural Net Libraries
-import tensorflow as tf
-from tensorflow.keras import metrics, Input                   
-from tensorflow.keras.optimizers import Adam, RMSprop
+# PIP-installed Imports                
+import numpy as np
+from sklearn.model_selection import train_test_split
+
+import tensorflow as tf     # Neural Net Libraries
+from tensorflow.keras import metrics                  
+from tensorflow.keras.optimizers import Adam
 from tensorflow.keras.models import Sequential
 from tensorflow.keras.layers import Dense, Dropout
 from tensorflow.keras.callbacks import EarlyStopping, Callback
-from sklearn.model_selection import train_test_split
 
 
 # SECTION 1 : custom classes needed to operate some features of the main GUI  ---------------------------------------------------                   
@@ -36,14 +34,13 @@ class TkEpochs(Callback):
         self.tw = train_window
     
     def on_epoch_begin(self, epoch, logs=None): # update the epoch progress bar at the start of each epoch
-        #self.tw.epoch_progress.increment()
         self.tw.set_epoch_progress(epoch + 1)
         
     def on_epoch_end(self, epoch, logs=None):  # abort training if the abort flag has been raised by the training window
         if self.tw.end_training:
             self.model.stop_training = True
         
-class TrainingWindow():
+class TrainingWindow(): # NOTE: add 'Save Weights' Button!!
     '''The window which displays training progress, was easier to subclass outside of the main GUI class'''
     def __init__(self, main, total_rounds, num_epochs, train_funct, reset_funct, train_button):
         self.total_rounds = total_rounds
@@ -80,9 +77,9 @@ class TrainingWindow():
         self.fam_label.grid(     row=2, column=0)
         self.curr_fam.grid(      row=2, column=1, sticky='w')
         self.round_label.grid(   row=3, column=0)
-        #self.round_progress, like all ttl widgets, has gridding built in
+        #self.round_progress, like all ttl widgets, has gridding built-in
         self.epoch_label.grid(   row=4, column=0)
-        #self.epoch_progress, like all ttl widgets, has gridding built in
+        #self.epoch_progress, like all ttl widgets, has gridding built-in
         self.status_label.grid(  row=5, column=0)
         self.curr_status.grid(   row=5, column=1, sticky='w')
         
@@ -148,7 +145,7 @@ class PLATINUMS_App:
         
         #Main Window
         self.main = main
-        self.main.title('PLATIN-UMS 4.3.2-alpha')
+        self.main.title('PLATIN-UMS 4.3.3-alpha')
         self.main.geometry('445x420')
 
         #Frame 1
@@ -175,7 +172,7 @@ class PLATINUMS_App:
         self.read_mode.set(None)
         self.selections = []
         
-        for i, mode in enumerate( ('Select All', 'By Family', 'By Species') ):
+        for i, mode in enumerate(('Select All', 'By Family', 'By Species')):
             button = tk.Radiobutton(self.input_frame, text=mode, value=mode, var=self.read_mode, command=self.further_sel)
             button.grid(row=0, column=i)
         self.confirm_sels = ttl.ConfirmButton(self.input_frame, self.confirm_inputs, row=0, col=3, sticky='e')
@@ -196,6 +193,7 @@ class PLATINUMS_App:
         self.trimming_max = None
         self.slice_decrement = None
         self.num_slices = None
+        self.keras_callbacks = []
         
         self.param_frame = ttl.ToggleFrame(self.main, 'Set Training Parameters: ', padx=9, pady=5, row=3) 
         self.fam_switch =  ttl.Switch(self.param_frame, 'Familiar Training :', row=0, col=1)
@@ -210,10 +208,9 @@ class PLATINUMS_App:
         self.slice_decrement_entry = ttl.LabelledEntry(self.param_frame, 'Slice Decrement:', tk.IntVar(), default=20, row=3, col=2)
         self.lower_bound_entry =     ttl.LabelledEntry(self.param_frame, 'Lower Bound:', tk.IntVar(), default=50, row=4, col=0)
         self.n_slice_entry =         ttl.LabelledEntry(self.param_frame, 'Number of Slices:', tk.IntVar(), default=1, row=4, col=2)
-        self.confirm_train_params =  ttl.ConfirmButton(self.param_frame, self.confirm_tparams, row=5, col=2, cs=2, sticky='e')
-
         self.trim_switch.dependents = (self.upper_bound_entry, self.slice_decrement_entry, self.lower_bound_entry, self.n_slice_entry)
-        self.keras_callbacks = []
+        
+        self.confirm_train_params =  ttl.ConfirmButton(self.param_frame, self.confirm_tparams, row=5, col=2, cs=2, sticky='e')
         self.param_frame.disable()
 
         #General/Misc
@@ -289,7 +286,7 @@ class PLATINUMS_App:
         self.upper_bound_entry.set_value(self.spectrum_size)
         self.all_species, self.families = sorted(self.all_species), sorted(self.families)  # sort and convert to lists
         
-        for index, family in enumerate(self.families):
+        for family in self.families:
             one_hot_vector = tuple(int(i == family) for i in self.families)
             self.family_mapping[family] = one_hot_vector
                                    
@@ -462,7 +459,7 @@ class PLATINUMS_App:
                         with tf.device('CPU:0'):     # eschews the requirement for a brand-new NVIDIA graphics card (which we don't have anyways)                      
                             model = Sequential()     # model block is created, layers are added to this block
                             model.add(Dense(512, input_dim=(upper_bound - lower_bound), activation='relu'))  # 512 neuron input layer, size depends on trimming
-                            #model.add(Dropout(0.5))                                    # dropout layer, to reduce overfit
+                            model.add(Dropout(0.5))                                    # dropout layer, to reduce overfit
                             model.add(Dense(512, activation='relu'))                   # 512 neuron hidden layer
                             model.add(Dense(len(self.families), activation='softmax')) # softmax gives prob. dist. of identity over all families
                             model.compile(loss='categorical_crossentropy', optimizer=Adam(lr=self.hyperparams['Learn Rate']), metrics=['accuracy']) 
