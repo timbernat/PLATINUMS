@@ -3,7 +3,7 @@ import iumsutils           # library of functions specific to my "-IUMS" class o
 import TimTkLib as ttl     # library of custom tkinter widgets I've written to make GUI assembly more straightforward 
 
 # Built-in Imports
-import csv, os, re
+import csv, json, os, re
 from time import time                      
 from datetime import timedelta
 from pathlib import Path
@@ -145,19 +145,15 @@ class PLATINUMS_App:
         
         #Main Window
         self.main = main
-        self.main.title('PLATIN-UMS 4.3.3-alpha')
+        self.main.title('PLATIN-UMS 4.3.6-alpha')
         self.main.geometry('445x420')
 
         #Frame 1
         self.data_frame = ttl.ToggleFrame(self.main, 'Select CSV to Read: ', padx=21, pady=5)
         self.chosen_file = tk.StringVar()
-        self.chem_data = {}
-        self.all_species = set()
-        self.families = set()
-        self.family_mapping = {}
-        self.spectrum_size = None
+        self.chem_data, self.species, self.families, self.family_mapping, self.spectrum_size, self.species_count = {}, [], [], {}, 0, Counter()
         
-        self.csv_menu =       ttl.DynOptionMenu(self.data_frame, self.chosen_file, lambda : iumsutils.get_by_filetype('csv'), default='--Choose a CSV--', width=28, colspan=2)
+        self.csv_menu =       ttl.DynOptionMenu(self.data_frame, self.chosen_file, lambda : iumsutils.get_by_filetype('json'), default='--Choose a CSV--', width=28, colspan=2)
         self.read_label =     tk.Label(self.data_frame, text='Read Status:')
         self.read_status =    ttl.StatusBox(self.data_frame, on_message='CSV Read!', off_message='No File Read', row=1, col=1)
         self.refresh_button = tk.Button(self.data_frame, text='Refresh CSVs', command=self.csv_menu.update, padx=15)
@@ -218,7 +214,7 @@ class PLATINUMS_App:
         self.switches = (self.fam_switch, self.stop_switch, self.trim_switch)
         self.entries = (self.epoch_entry, self.batchsize_entry, self.learnrate_entry, self.n_slice_entry,
                         self.upper_bound_entry, self.slice_decrement_entry, self.lower_bound_entry)
-        self.arrays = (self.chem_data, self.selections, self.family_mapping, self.hyperparams)
+        self.arrays = (self.chem_data, self.species, self.families, self.family_mapping, self.selections, self.hyperparams)
 
         self.exit_button =  tk.Button(self.main, text='Exit', padx=22, pady=22, bg='red', command=self.shutdown)
         self.reset_button = tk.Button(self.main, text='Reset', padx=20, bg='orange', command=self.reset)
@@ -253,6 +249,7 @@ class PLATINUMS_App:
         self.csv_menu.reset_default()
         self.read_mode.set(None)
         self.cycle_fams.set(0)
+        self.spectrum_size = 0
         
         for switch in self.switches:
             switch.disable()
@@ -262,44 +259,21 @@ class PLATINUMS_App:
         
         for array in self.arrays:
             array.clear()
-        self.all_species = set()
-        self.families = set()
         
         self.reset_training()  # keras callbacks and summaries, while not in self.arrays, are cleared by this call
         self.main.lift()
 
                 
     #Frame 1 (Reading) Methods 
-    def read_chem_data(self): 
-        '''Used to read and format the data from the csv provided into a form usable by the training program
-        Returns the read data (with vector) and sorted lists of the species and families found in the data'''
-        with open(self.chosen_file.get(), 'r') as file:
-            for row in csv.reader(file):
-                instance, curr_species, spectrum = row[0], iumsutils.isolate_species(row[0]), [float(i) for i in row[1:]]
-                
-                self.chem_data[instance] = spectrum
-                self.all_species.add(curr_species)
-                self.families.add(iumsutils.get_family(instance))
-                if not self.spectrum_size:
-                    self.spectrum_size = len(spectrum)
-
-        self.upper_bound_entry.set_value(self.spectrum_size)
-        self.all_species, self.families = sorted(self.all_species), sorted(self.families)  # sort and convert to lists
-        
-        for family in self.families:
-            one_hot_vector = tuple(int(i == family) for i in self.families)
-            self.family_mapping[family] = one_hot_vector
-                                   
-        for instance, data in self.chem_data.items():  # add mapping vector to all data entries
-            vector = self.family_mapping[iumsutils.get_family(instance)]
-            self.chem_data[instance] = (data, vector)
-    
     def import_data(self):
         '''Read in data based on the selected data file'''
         if self.chosen_file.get() == '--Choose a CSV--':
             messagebox.showerror('File Error', 'No CSV selected')
         else:
-            self.read_chem_data()
+            #self.read_chem_data()
+            with open(self.chosen_file.get(), 'r') as data_file:
+                self.chem_data, self.species, self.families, self.family_mapping, self.spectrum_size, self.species_count = json.load(data_file).values()
+            self.upper_bound_entry.set_value(self.spectrum_size)
             self.read_status.set_status(True)
             self.isolate(self.input_frame)
     
@@ -309,9 +283,9 @@ class PLATINUMS_App:
         '''logic for selection of members to include in training, based on the chosen selection mode'''
         self.selections.clear()
         if self.read_mode.get() == 'Select All':
-            self.selections = self.all_species
+            self.selections = self.species
         elif self.read_mode.get() == 'By Species':
-            ttl.SelectionWindow(self.main, self.input_frame, '1000x210', self.all_species, self.selections, ncols=8)
+            ttl.SelectionWindow(self.main, self.input_frame, '1000x210', self.species, self.selections, ncols=8)
         elif self.read_mode.get() == 'By Family':
             ttl.SelectionWindow(self.main, self.input_frame, '270x85', self.families, self.selections, ncols=3)
 
@@ -321,7 +295,7 @@ class PLATINUMS_App:
             messagebox.showerror('No selections made', 'Please select species to evaluate')
         else:
             if self.read_mode.get() == 'By Family':  # pick out species by family if selection by family is made
-                self.selections = [species for species in self.all_species if iumsutils.get_family(species) in self.selections]
+                self.selections = [species for species in self.species if iumsutils.get_family(species) in self.selections]
             self.isolate(self.hyperparam_frame)
 
     
