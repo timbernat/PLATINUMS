@@ -17,8 +17,6 @@ from collections import Counter
 
  # PIP-installed Imports                
 import numpy as np
-import matplotlib.pyplot as plt
-#import matplotlib.backends.backend_tkagg
 
 # Neural Net Libraries
 import tensorflow as tf
@@ -162,7 +160,7 @@ class PLATINUMS_App:
         self.family_mapping = {}
         self.spectrum_size = None
         
-        self.csv_menu =       ttl.DynOptionMenu(self.data_frame, self.chosen_file, iumsutils.get_csvs, default='--Choose a CSV--', width=28, colspan=2)
+        self.csv_menu =       ttl.DynOptionMenu(self.data_frame, self.chosen_file, lambda : iumsutils.get_by_filetype('csv'), default='--Choose a CSV--', width=28, colspan=2)
         self.read_label =     tk.Label(self.data_frame, text='Read Status:')
         self.read_status =    ttl.StatusBox(self.data_frame, on_message='CSV Read!', off_message='No File Read', row=1, col=1)
         self.refresh_button = tk.Button(self.data_frame, text='Refresh CSVs', command=self.csv_menu.update, padx=15)
