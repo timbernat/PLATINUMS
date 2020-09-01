@@ -16,9 +16,9 @@ def standard_dev(iterable):
     avg = average(iterable)  # done to avoid repeated calculation
     return ( sum((i - avg)**2 for i in iterable)/len(iterable) )**0.5
 
-def get_csvs():  # NOTE: make this check for correct formatting as well
-    '''Get all csv files present in the current directory'''
-    csvs_present = tuple(file for file in os.listdir() if re.search('.csv\Z', file))
+def get_by_filetype(extension):  # NOTE: make this check for correct formatting as well
+    '''Get all files of a particular file type present in the current directory'''
+    csvs_present = tuple(file for file in os.listdir() if re.search(f'.{extension}\Z', file))
     if csvs_present == ():
         csvs_present = (None,)
     return csvs_present
@@ -82,21 +82,26 @@ def adagraph(plot_list, ncols, save_dir, display_size=20):  # ADD AXIS LABELS, S
         
         
 # data cleaning and transformation methods-------------------------------------------------------------------------------------------------
-def fourierize(source_file_name):  
+def fourierize(source_file_name, cutoff=None, smooth_only=False):  
     '''Creates a copy of a PLATIN-UMS-compatible data file, with all spectra being replaced by their Discrete Fourier Transforms'''
-    dest_file_name = re.sub('.csv', '(FT).csv', source_file_name) # explicit naming for the new file
-    with open(source_file_name, 'r') as source_file, open(dest_file_name, 'w', newline='') as dest_file:
+    dest_file_name = f'{source_file_name}(FT{smooth_only and "S" or ""}).csv'
+    with open(f'{source_file_name}.csv', 'r') as source_file, open(dest_file_name, 'w', newline='') as dest_file:
         for row in csv.reader(source_file):
             name, data = row[0], [float(i) for i in row[1:]]    # isolate the name and data
-            data_fft = np.abs(np.fft.fft(data))                 # perform a fast Fourier transform over the data
-            csv.writer(dest_file).writerow( [name, *data_fft] ) # write the resulting row to the named target file
+            fft_data = np.fft.hfft(data)                 # perform a Hermitian (real-valued) fast Fourier transform over the data
+            if cutoff:
+                blanks = np.zeros(np.size(fft_data)-cutoff) 
+                fft_data = np.concatenate( (fft_data[:cutoff], blanks) )
+            if smooth_only:
+                fft_data = np.fft.ihfft(fft_data).real      # if smoothing, perform the inverse transform and return the real component
+            csv.writer(dest_file).writerow( [name, *fft_data] ) # write the resulting row to the named target file
             
-def normalize(file_name, cutoff_value=0.5):  # this method is very much WIP, quality of normalization cannot be spoken for at the time of writing
+def filter_and_smooth(file_name, cutoff=0.5):  # this method is very much WIP, quality of normalization cannot be spoken for at the time of writing
     '''Duplicate a dataset, omitting all spectra whose maximum falls below the specified cutoff value and applying Savitzky-Golay Filtering'''
     with open(f'{file_name}.csv', 'r') as source_file, open(f'{file_name}(S).csv', 'w', newline='') as dest_file:
         for row in csv.reader(source_file):
             instance, spectrum = row[0], [float(i) for i in row[1:]]
-            if max(spectrum) > cutoff_value:
+            if max(spectrum) > cutoff:
                 new_row = (instance, *savgol_filter(spectrum, 5, 1))  # create a new row with the filtered data after culling
                 csv.writer(dest_file).writerow(new_row)
 
