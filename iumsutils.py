@@ -1,4 +1,6 @@
-import csv, math, re, os
+import csv, json, math, re, os
+from collections import Counter
+
 import matplotlib.pyplot as plt
 import numpy as np
 from scipy.signal import savgol_filter
@@ -81,37 +83,100 @@ def adagraph(plot_list, ncols, save_dir, display_size=20):  # ADD AXIS LABELS, S
         plt.close('all')
         
         
-# data cleaning and transformation methods-------------------------------------------------------------------------------------------------
-def fourierize(source_file_name, cutoff=None, smooth_only=False):  
-    '''Creates a copy of a PLATIN-UMS-compatible data file, with all spectra being replaced by their Discrete Fourier Transforms'''
-    dest_file_name = f'{source_file_name}(FT{smooth_only and "S" or ""}).csv'
-    with open(f'{source_file_name}.csv', 'r') as source_file, open(dest_file_name, 'w', newline='') as dest_file:
-        for row in csv.reader(source_file):
-            name, data = row[0], [float(i) for i in row[1:]]    # isolate the name and data
-            fft_data = np.fft.hfft(data)                 # perform a Hermitian (real-valued) fast Fourier transform over the data
-            if cutoff:
-                blanks = np.zeros(np.size(fft_data)-cutoff) 
-                fft_data = np.concatenate( (fft_data[:cutoff], blanks) )
-            if smooth_only:
-                fft_data = np.fft.ihfft(fft_data).real      # if smoothing, perform the inverse transform and return the real component
-            csv.writer(dest_file).writerow( [name, *fft_data] ) # write the resulting row to the named target file
-            
-def filter_and_smooth(file_name, cutoff=0.5):  # this method is very much WIP, quality of normalization cannot be spoken for at the time of writing
-    '''Duplicate a dataset, omitting all spectra whose maximum falls below the specified cutoff value and applying Savitzky-Golay Filtering'''
-    with open(f'{file_name}.csv', 'r') as source_file, open(f'{file_name}(S).csv', 'w', newline='') as dest_file:
-        for row in csv.reader(source_file):
-            instance, spectrum = row[0], [float(i) for i in row[1:]]
-            if max(spectrum) > cutoff:
-                new_row = (instance, *savgol_filter(spectrum, 5, 1))  # create a new row with the filtered data after culling
-                csv.writer(dest_file).writerow(new_row)
+# file conversion methods - to and from csv to json-------------------------------------------------------------------------------------------------
+def jsonize(source_file_name): 
+    '''Process spectral data csvs, generating labels, vector mappings, species counts, and other information,
+    then cast the data to a json for ease of data reading in other applications and methods'''
+    chem_data, species, families, family_mapping, spectrum_size, species_count = ({}, set(), set(), {}, 0, Counter())
+    with open(f'{source_file_name}.csv', 'r') as csv_file:
+        for row in csv.reader(csv_file):
+            instance, curr_species, spectrum = row[0], isolate_species(row[0]), [float(i) for i in row[1:]]
 
+            chem_data[instance] = spectrum
+            species.add(curr_species)
+            species_count[curr_species] += 1
+            families.add(get_family(instance))
+             
+            if not spectrum_size: # record size of first spectrum, throw an error if any subsequent spectra are not the same size
+                spectrum_size = len(spectrum)
+            elif len(spectrum) != spectrum_size:
+                raise Exception(ValueError)
+                return
+                    
+    species, families = sorted(species), sorted(families)  # sort and convert to lists
+
+    for family in families: # build a dict of onehot mapping vectors by family
+        family_mapping[family] = tuple(int(i == family) for i in families)
+
+    for instance, data in chem_data.items():  # add mapping vector to all data entries
+        vector = family_mapping[get_family(instance)]
+        chem_data[instance] = (data, vector)
+        
+    packaged_data = {   # package all the data into a single dict for json dumping
+        'chem_data' : chem_data,
+        'species' : species,
+        'families' : families,
+        'family_mapping' : family_mapping,
+        'spectrum_size' : spectrum_size,
+        'species_count' : species_count
+    }
+    with open(f'{source_file_name}.json', 'w') as json_file:
+        json.dump(packaged_data, json_file) # dump our data into a json file with the same name as the original datacsv
+
+def csvize(source_file_name):
+    '''Inverse of jsonize, takes a processed chemical data json file and reduces it to a csv with just the listed spectra'''
+    with open(f'{source_file_name}.json', 'r') as source_file, open(f'{source_file_name}.csv', 'w', newline='') as dest_file:
+        json_data = json.load(source_file)
+        for instance, data in json_data['chem_data'].items():
+            row = [instance, *data[0]] # include only the spectrum (not the vector) after the name in the row
+            csv.writer(dest_file).writerow(row)
+
+# data transformation methods - note that these only work with jsons for simplicity, if you want a csv, then use csvize after the transformation
+def base_transform(file_name, operation, discriminator=lambda x : 0, indicator='', prevent_overwrites=False, **opargs):
+    '''The base method for transforming data, takes target file (always a .json) and a function to operate on each spectrum in the file.
+    Optionally, a boolean-valued function over spectra can be passed as a discriminator to set criteria for removal of spectra in the transform'''
+    source_file_name, dest_file_name = f'{file_name}.json', f'{file_name}{indicator}.json'
+    if prevent_overwrites and os.path.exists(dest_file_name):  # if overwrite prevention is enabled, throw an error instead of transforming
+        raise Exception(FileExistsError)
+    
+    with open(source_file_name, 'r') as source_file, open(dest_file_name, 'w', newline='') as dest_file:
+        json_data = json.load(source_file)
+        json_data['chem_data'] = {instance : (operation(spectrum, **opargs), vector)  # perform dictionary comprehension to allow for deletion of chemdata entries
+                                  for instance, (spectrum, vector) in json_data['chem_data'].items() if not discriminator(spectrum)}
+        json.dump(json_data, dest_file) # dump the result in the new file
+
+
+def fft_with_smoothing(spectrum, harmonic_cutoff=None, smooth_only=False):                                                      
+    '''Performs a fast Fourier Transform over a spectrum; can optionally cut off higher frequencies, as well as
+    converting the truncated frequency space into a (now noise-reduced) spectrum using the inverse transform'''
+    fft_spectrum = np.fft.hfft(spectrum)  # perform a Hermitian (real-valued) fast Fourier transform over the data
+    if harmonic_cutoff:
+        blanks = np.zeros(np.size(fft_spectrum)-harmonic_cutoff) # make everything beyond the harmonic cut-off point zeros
+        fft_spectrum = np.concatenate( (fft_spectrum[:harmonic_cutoff], blanks) )
+    if smooth_only:
+        fft_spectrum = np.fft.ihfft(fft_spectrum).real # keep only real part of inverse transform (imag part is 0 everywhere, but is kept complex type for some reason)
+    return list(fft_spectrum)
+    
+def fourierize(file_name, harmonic_cutoff=None, smooth_only=False):  
+    '''Creates a copy of a PLATIN-UMS-compatible data file, with all spectra being replaced by their Discrete Fourier Transforms'''
+    base_transform(file_name, operation=fft_with_smoothing, indicator=f'(FT{smooth_only and "S" or ""})', harmonic_cutoff=harmonic_cutoff, smooth_only=smooth_only)
+
+    
+def sav_golay_smoothing(spectrum, window_length=5, polyorder=1):
+    '''Wrapper to convert SG-smoothed ndarray into lists for packaging into jsons'''
+    return list(savgol_filter(spectrum, window_length=window_length, polyorder=polyorder))
+    
+def filterize(file_name, cutoff=0.5):  # this method is very much WIP, quality of normalization cannot be spoken for at the time of writing
+    '''Duplicate a dataset, omitting all spectra whose maximum falls below the specified cutoff value and applying Savitzky-Golay Filtering'''
+    base_transform(file_name, operation=sav_golay_smoothing, discriminator=lambda spectrum : max(spectrum) < cutoff, indicator='(S)')
+
+       
 def analyze_noise(file_name, ncols=4):  # consider making min/avg/max calculations in-place, rather than after reading
     '''Generate a set of plots for all species in a dataset which shows how the baseline noise varies across spectra at each sample point'''
-    with open(f'{file_name}.csv', 'r') as source_file:
-        data_by_species = {}
-        for row in csv.reader(source_file):
-            instance, species, spectrum = row[0], isolate_species(row[0]), [float(i) for i in row[1:]]
-
+    with open(f'{file_name}.json', 'r') as source_file:
+        json_data, data_by_species = json.load(source_file), {}
+        for instance, (spectrum, vector) in json_data['chem_data'].items():
+            species = isolate_species(instance)
             if species not in data_by_species:  # ensure entries exists to avoid KeyError
                 data_by_species[species] = []
             data_by_species[species].append(spectrum)
@@ -121,5 +186,5 @@ def analyze_noise(file_name, ncols=4):  # consider making min/avg/max calculatio
         noise_stats = [tuple(map(funct, zip(*spectra))) for funct in (min, average, max)] # tuple containing the min, avg, and max values across all points in all current species' spectra
         plot_title = f'S.V. of {species}, ({len(spectra)} instances)'
         noise_plots.append((noise_stats, plot_title, 'v'))  # bundled plot for the current species
-
     adagraph(noise_plots, ncols, f'./Dataset Noise Plots/Spectral Variation by Species, {file_name}')
+   
