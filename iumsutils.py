@@ -141,8 +141,21 @@ def base_transform(file_name, operation, discriminator=lambda x : 0, indicator='
     
     with open(source_file_name, 'r') as source_file, open(dest_file_name, 'w', newline='') as dest_file:
         json_data = json.load(source_file)
-        json_data['chem_data'] = {instance : (operation(spectrum, **opargs), vector)  # perform dictionary comprehension to allow for deletion of chemdata entries
-                                  for instance, (spectrum, vector) in json_data['chem_data'].items() if not discriminator(spectrum)}
+           
+        temp_dict = {} # temporary dictionary is used to allow for deletion of chemdata entries (can't delete while iterating, can't get length in dict comprehension)
+        for instance, (spectrum, vector) in json_data['chem_data'].items():
+            if not discriminator(spectrum):
+                temp_dict[instance] = (operation(spectrum, **opargs), vector)
+        json_data['chem_data'] = temp_dict
+        json_data['spectrum_size'] = len(operation(spectrum, **opargs)) # takes the length to be that of the last spectrum in the set; all spectra are
+        # guaranteed to be the same size by the jsonize method, so under a uniform transform, any change in spectrum size should be uniform throughout
+        
+        # eventually, make this block only run if a non-default discriminator is chosen (only if spectra are removed it is necessary to recount families, species, and instances)
+        all_instances = json_data['chem_data'].keys()
+        json_data['families'] = sorted( set(get_family(instance) for instance in all_instances) )
+        json_data['species'] = sorted( set(isolate_species(instance) for instance in all_instances) )
+        json_data['species_count'] = Counter(isolate_species(instance) for instance in all_instances)
+            
         json.dump(json_data, dest_file) # dump the result in the new file
 
 
@@ -184,7 +197,36 @@ def analyze_noise(file_name, ncols=4):  # consider making min/avg/max calculatio
     noise_plots = []
     for species, spectra in data_by_species.items():
         noise_stats = [tuple(map(funct, zip(*spectra))) for funct in (min, average, max)] # tuple containing the min, avg, and max values across all points in all current species' spectra
-        plot_title = f'S.V. of {species}, ({len(spectra)} instances)'
+        plot_title = f'S.V. of {species}, ({json_data["spectrum_size"]} instances)'
         noise_plots.append((noise_stats, plot_title, 'v'))  # bundled plot for the current species
     adagraph(noise_plots, ncols, f'./Dataset Noise Plots/Spectral Variation by Species, {file_name}')
-   
+    
+def analyze_fourier_smoothing(file_name, instance, cutoff, nrows=1, ncols=4, display_size=20, save_plot=False):
+    '''Investigate the original spectrum, Fourier Spectrum, truncated Fourier Spectrum, and reconstructed truncated spectrum of a
+    single instance in the specified dataset. Optionally, can save the figure to the current directory, if it is of interest'''
+    with open(f'{file_name}.json', 'r') as json_file:
+        json_data = json.load(json_file)
+    
+    fig, axs = plt.subplots(nrows, ncols, figsize=(display_size, display_size * nrows/ncols))
+    
+    orig_data = json_data['chem_data'][instance][0]
+    axs[0].plot(orig_data, 'r-')
+    axs[0].set_title('Original Spectrum')
+    
+    fft_data = np.fft.hfft(orig_data)
+    axs[1].plot(fft_data)
+    axs[1].set_title('FFT Spectrum')
+    
+    cut_fft_data = np.concatenate( (fft_data[:cutoff], np.zeros(np.size(fft_data)-cutoff)) )
+    axs[2].plot(cut_fft_data)
+    axs[2].set_title(f'FFT Spectrum (to point {cutoff})')
+    
+    rec_data = np.fft.ihfft(cut_fft_data).real
+    axs[3].plot(rec_data, 'r-')
+    axs[3].set_title(f'Reconstructed Spectrum (to point {cutoff})')
+    
+    plt.suptitle(instance)
+    if save_plot:
+        plt.savefig(f'Fourier Smoothing of {instance} (to point {cutoff})')
+    else:
+        plt.show()
