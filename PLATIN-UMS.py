@@ -365,7 +365,8 @@ class PLATINUMS_App:
             self.train_window.set_familiar_status(familiar_str)
             
             self.train_window.set_status('Creating Folders...') 
-            results_folder = Path('Saved Training Results', f'{str(self.chosen_file.get())[:-4]} Results', f'{self.hyperparams["Number of Epochs"]}-epoch {familiar_str}')
+            file_folder_name = re.sub('.\w+\Z', ' Results', str(self.chosen_file.get()))
+            results_folder = Path('Saved Training Results', file_folder_name, f'{self.hyperparams["Number of Epochs"]}-epoch {familiar_str}')
             if os.path.exists(results_folder):   # prompt user to overwrite file if one already exists
                 if messagebox.askyesno('Duplicates Found', 'Folder with same data settings found;\nOverwrite old folder?'):
                     rmtree(results_folder, ignore_errors=True)
