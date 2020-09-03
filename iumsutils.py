@@ -1,4 +1,5 @@
-import csv, json, math, re, os
+import csv, json, math, re
+from pathlib import Path
 from collections import Counter
 
 import matplotlib.pyplot as plt
@@ -20,10 +21,10 @@ def standard_dev(iterable):
 
 def get_by_filetype(extension):  # NOTE: make this check for correct formatting as well
     '''Get all files of a particular file type present in the current directory'''
-    csvs_present = tuple(file for file in os.listdir() if re.search(f'.{extension}\Z', file))
-    if csvs_present == ():
-        csvs_present = (None,)
-    return csvs_present
+    filetypes_present = tuple(file.name for file in Path.cwd().iterdir() if file.suffix == extension)
+    if filetypes_present == ():
+        filetypes_present = (None,)
+    return filetypes_present
 
 def isolate_species(instance_name): # NOTE: consider expanding range of allowable strings in the future
     '''Strips extra numbers off the end of the name of an instance in a csv and just tells you its species'''
@@ -83,7 +84,7 @@ def adagraph(plot_list, ncols, save_dir, display_size=20):  # ADD AXIS LABELS, S
         plt.close('all')
         
         
-# file conversion methods - to and from csv to json-------------------------------------------------------------------------------------------------
+# file conversion methods - csv to json and vice versa-------------------------------------------------------------------------------------------------
 def jsonize(source_file_name): 
     '''Process spectral data csvs, generating labels, vector mappings, species counts, and other information,
     then cast the data to a json for ease of data reading in other applications and methods'''
@@ -132,11 +133,11 @@ def csvize(source_file_name):
             csv.writer(dest_file).writerow(row)
 
 # data transformation methods - note that these only work with jsons for simplicity, if you want a csv, then use csvize after the transformation
-def base_transform(file_name, operation, discriminator=lambda x : 0, indicator='', prevent_overwrites=False, **opargs):
+def base_transform(file_name, operation, discriminator=None, indicator='', prevent_overwrites=False, **opargs):
     '''The base method for transforming data, takes target file (always a .json) and a function to operate on each spectrum in the file.
     Optionally, a boolean-valued function over spectra can be passed as a discriminator to set criteria for removal of spectra in the transform'''
     source_file_name, dest_file_name = f'{file_name}.json', f'{file_name}{indicator}.json'
-    if prevent_overwrites and os.path.exists(dest_file_name):  # if overwrite prevention is enabled, throw an error instead of transforming
+    if prevent_overwrites and Path(dest_file_name).exists():  # if overwrite prevention is enabled, throw an error instead of transforming
         raise Exception(FileExistsError)
     
     with open(source_file_name, 'r') as source_file, open(dest_file_name, 'w', newline='') as dest_file:
@@ -144,18 +145,18 @@ def base_transform(file_name, operation, discriminator=lambda x : 0, indicator='
            
         temp_dict = {} # temporary dictionary is used to allow for deletion of chemdata entries (can't delete while iterating, can't get length in dict comprehension)
         for instance, (spectrum, vector) in json_data['chem_data'].items():
-            if not discriminator(spectrum):
+            if not discriminator or not discriminator(spectrum): # only perform the operation if no discriminator exists or if the discrimination criterion is unmet
                 temp_dict[instance] = (operation(spectrum, **opargs), vector)
         json_data['chem_data'] = temp_dict
         json_data['spectrum_size'] = len(operation(spectrum, **opargs)) # takes the length to be that of the last spectrum in the set; all spectra are
         # guaranteed to be the same size by the jsonize method, so under a uniform transform, any change in spectrum size should be uniform throughout
         
-        # eventually, make this block only run if a non-default discriminator is chosen (only if spectra are removed it is necessary to recount families, species, and instances)
-        all_instances = json_data['chem_data'].keys()
-        json_data['families'] = sorted( set(get_family(instance) for instance in all_instances) )
-        json_data['species'] = sorted( set(isolate_species(instance) for instance in all_instances) )
-        json_data['species_count'] = Counter(isolate_species(instance) for instance in all_instances)
-            
+        if discriminator:  # only necessary to recount families, species, and instances is spectra are being removed
+            all_instances = json_data['chem_data'].keys()
+            json_data['families'] = sorted( set(get_family(instance) for instance in all_instances) )
+            json_data['species'] = sorted( set(isolate_species(instance) for instance in all_instances) )
+            json_data['species_count'] = Counter(isolate_species(instance) for instance in all_instances)
+
         json.dump(json_data, dest_file) # dump the result in the new file
 
 
@@ -197,7 +198,7 @@ def analyze_noise(file_name, ncols=4):  # consider making min/avg/max calculatio
     noise_plots = []
     for species, spectra in data_by_species.items():
         noise_stats = [tuple(map(funct, zip(*spectra))) for funct in (min, average, max)] # tuple containing the min, avg, and max values across all points in all current species' spectra
-        plot_title = f'S.V. of {species}, ({json_data["spectrum_size"]} instances)'
+        plot_title = f'S.V. of {species}, ({len(spectra)} instances)'
         noise_plots.append((noise_stats, plot_title, 'v'))  # bundled plot for the current species
     adagraph(noise_plots, ncols, f'./Dataset Noise Plots/Spectral Variation by Species, {file_name}')
     
@@ -230,3 +231,4 @@ def analyze_fourier_smoothing(file_name, instance, cutoff, nrows=1, ncols=4, dis
         plt.savefig(f'Fourier Smoothing of {instance} (to point {cutoff})')
     else:
         plt.show()
+    plt.close('all')
