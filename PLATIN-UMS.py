@@ -3,16 +3,14 @@ import iumsutils           # library of functions specific to my "-IUMS" class o
 import TimTkLib as ttl     # library of custom tkinter widgets I've written to make GUI assembly more straightforward 
 
 # Built-in Imports
-import csv, json, os, re
+import json
 from time import time                      
 from datetime import timedelta
 from pathlib import Path
 from shutil import rmtree
 from collections import Counter
-
 import tkinter as tk    # Built-In GUI imports
 from tkinter import messagebox
-from tkinter.ttk import Progressbar, Style
 
 # PIP-installed Imports                
 import numpy as np
@@ -57,18 +55,18 @@ class TrainingWindow(): # NOTE: add 'Save Weights' Button!!
         self.status_frame = tk.Frame(self.training_window, bd=2, padx=20, relief='groove')
         self.status_frame.grid(row=0, column=0)
         
-        self.member_label =   tk.Label(self.status_frame, text='Current Species: ')
-        self.curr_member =    tk.Label(self.status_frame)
-        self.slice_label =    tk.Label(self.status_frame, text='Current Data Slice: ')
-        self.curr_slice =     tk.Label(self.status_frame)
-        self.fam_label =      tk.Label(self.status_frame, text='Training Type: ')
-        self.curr_fam =       tk.Label(self.status_frame)
-        self.round_label =    tk.Label(self.status_frame, text='Training Round: ')
+        self.member_label   = tk.Label(self.status_frame, text='Current Species: ')
+        self.curr_member    = tk.Label(self.status_frame)
+        self.slice_label    = tk.Label(self.status_frame, text='Current Data Slice: ')
+        self.curr_slice     = tk.Label(self.status_frame)
+        self.fam_label      = tk.Label(self.status_frame, text='Training Type: ')
+        self.curr_fam       = tk.Label(self.status_frame)
+        self.round_label    = tk.Label(self.status_frame, text='Training Round: ')
         self.round_progress = ttl.NumberedProgBar(self.status_frame, total_rounds, row=3, col=1)
-        self.epoch_label =    tk.Label(self.status_frame, text='Training Epoch: ')
+        self.epoch_label    = tk.Label(self.status_frame, text='Training Epoch: ')
         self.epoch_progress = ttl.NumberedProgBar(self.status_frame, num_epochs, style_num=2, row=4, col=1) 
-        self.status_label =   tk.Label(self.status_frame, text='Current Status: ')
-        self.curr_status =    tk.Label(self.status_frame)
+        self.status_label   = tk.Label(self.status_frame, text='Current Status: ')
+        self.curr_status    =  tk.Label(self.status_frame)
         
         self.member_label.grid(  row=0, column=0)
         self.curr_member.grid(   row=0, column=1, sticky='w')
@@ -86,10 +84,10 @@ class TrainingWindow(): # NOTE: add 'Save Weights' Button!!
         self.reset()
     
         #Training Buttons
-        self.button_frame =   ttl.ToggleFrame(self.training_window, '', padx=0, pady=0, row=1)
+        self.button_frame   = ttl.ToggleFrame(self.training_window, '', padx=0, pady=0, row=1)
         self.retrain_button = tk.Button(self.button_frame, text='Retrain', width=17, bg='dodger blue', command=train_funct)
         self.reinput_button = tk.Button(self.button_frame, text='Reset', width=17, bg='orange', command=reset_funct)
-        self.abort_button =   tk.Button(self.button_frame, text='Abort Training', width=17, bg='red', command=self.abort)
+        self.abort_button   = tk.Button(self.button_frame, text='Abort Training', width=17, bg='red', command=self.abort)
         
         self.retrain_button.grid(row=0, column=0)
         self.reinput_button.grid(row=0, column=1)
@@ -149,24 +147,25 @@ class PLATINUMS_App:
         self.main.geometry('445x420')
 
         #Frame 1
-        self.data_frame = ttl.ToggleFrame(self.main, 'Select CSV to Read: ', padx=21, pady=5)
+        self.data_frame  = ttl.ToggleFrame(self.main, 'Select JSON to Read: ', padx=21, pady=5)
         self.chosen_file = tk.StringVar()
+        self.data_file = None
         self.chem_data, self.species, self.families, self.family_mapping, self.spectrum_size, self.species_count = {}, [], [], {}, 0, Counter()
         
-        self.csv_menu =       ttl.DynOptionMenu(self.data_frame, self.chosen_file, lambda : iumsutils.get_by_filetype('json'), default='--Choose a CSV--', width=28, colspan=2)
-        self.read_label =     tk.Label(self.data_frame, text='Read Status:')
-        self.read_status =    ttl.StatusBox(self.data_frame, on_message='CSV Read!', off_message='No File Read', row=1, col=1)
-        self.refresh_button = tk.Button(self.data_frame, text='Refresh CSVs', command=self.csv_menu.update, padx=15)
-        self.confirm_data =   ttl.ConfirmButton(self.data_frame, self.import_data, padx=2, row=1, col=2)
+        self.json_menu      = ttl.DynOptionMenu(self.data_frame, self.chosen_file, lambda : iumsutils.get_by_filetype('.json'), default='--Choose a JSON--', width=28, colspan=2)
+        self.read_label     = tk.Label(self.data_frame, text='Read Status:')
+        self.read_status    = ttl.StatusBox(self.data_frame, on_message='JSON Read!', off_message='No File Read', row=1, col=1)
+        self.refresh_button = tk.Button(self.data_frame, text='Refresh JSONs', command=self.json_menu.update, padx=11)
+        self.confirm_data   = ttl.ConfirmButton(self.data_frame, self.import_data, padx=2, row=1, col=2)
         
         self.refresh_button.grid(row=0, column=2)
-        self.read_label.grid(row=1, column=0)
+        self.read_label.grid(    row=1, column=0)
         
         #Frame 2
         self.input_frame = ttl.ToggleFrame(self.main, 'Select Input Mode: ', padx=5, pady=5, row=1)
-        self.read_mode = tk.StringVar()
+        self.read_mode   = tk.StringVar()
         self.read_mode.set(None)
-        self.selections = []
+        self.selections  = []
         
         for i, mode in enumerate(('Select All', 'By Family', 'By Species')):
             button = tk.Radiobutton(self.input_frame, text=mode, value=mode, var=self.read_mode, command=self.further_sel)
@@ -177,10 +176,10 @@ class PLATINUMS_App:
         #Frame 3
         self.hyperparams = {}
         
-        self.hyperparam_frame =    ttl.ToggleFrame(self.main, 'Set Hyperparameters: ', padx=8, pady=5, row=2)
-        self.epoch_entry =         ttl.LabelledEntry(self.hyperparam_frame, 'Epochs:', tk.IntVar(), width=19, default=2048)
-        self.batchsize_entry =     ttl.LabelledEntry(self.hyperparam_frame, 'Batchsize:', tk.IntVar(), width=19, default=32, row=1)
-        self.learnrate_entry =     ttl.LabelledEntry(self.hyperparam_frame, 'Learnrate:', tk.DoubleVar(), width=18, default=2e-5, col=3)
+        self.hyperparam_frame    = ttl.ToggleFrame(self.main, 'Set Hyperparameters: ', padx=8, pady=5, row=2)
+        self.epoch_entry         = ttl.LabelledEntry(self.hyperparam_frame, 'Epochs:', tk.IntVar(), width=19, default=2048)
+        self.batchsize_entry     = ttl.LabelledEntry(self.hyperparam_frame, 'Batchsize:', tk.IntVar(), width=19, default=32, row=1)
+        self.learnrate_entry     = ttl.LabelledEntry(self.hyperparam_frame, 'Learnrate:', tk.DoubleVar(), width=18, default=2e-5, col=3)
         self.confirm_hyperparams = ttl.ConfirmButton(self.hyperparam_frame, self.confirm_hp, row=1, col=3, cs=2, sticky='e')
         self.hyperparam_frame.disable()
         
@@ -192,31 +191,31 @@ class PLATINUMS_App:
         self.keras_callbacks = []
         
         self.param_frame = ttl.ToggleFrame(self.main, 'Set Training Parameters: ', padx=9, pady=5, row=3) 
-        self.fam_switch =  ttl.Switch(self.param_frame, 'Familiar Training :', row=0, col=1)
+        self.fam_switch  = ttl.Switch(self.param_frame, 'Familiar Training :', row=0, col=1)
         self.stop_switch = ttl.Switch(self.param_frame, 'Early Stopping: ', row=1, col=1)
         self.trim_switch = ttl.Switch(self.param_frame, 'RIP Trimming: ', row=2, col=1)
 
-        self.cycle_fams = tk.IntVar()
+        self.cycle_fams   = tk.IntVar()
         self.cycle_button = tk.Checkbutton(self.param_frame, text='Cycle', variable=self.cycle_fams)
         self.cycle_button.grid(row=0, column=3)
         
-        self.upper_bound_entry =     ttl.LabelledEntry(self.param_frame, 'Upper Bound:', tk.IntVar(), default=400, row=3, col=0)
-        self.slice_decrement_entry = ttl.LabelledEntry(self.param_frame, 'Slice Decrement:', tk.IntVar(), default=20, row=3, col=2)
-        self.lower_bound_entry =     ttl.LabelledEntry(self.param_frame, 'Lower Bound:', tk.IntVar(), default=50, row=4, col=0)
-        self.n_slice_entry =         ttl.LabelledEntry(self.param_frame, 'Number of Slices:', tk.IntVar(), default=1, row=4, col=2)
+        self.upper_bound_entry      = ttl.LabelledEntry(self.param_frame, 'Upper Bound:', tk.IntVar(), default=400, row=3, col=0)
+        self.slice_decrement_entry  = ttl.LabelledEntry(self.param_frame, 'Slice Decrement:', tk.IntVar(), default=20, row=3, col=2)
+        self.lower_bound_entry      = ttl.LabelledEntry(self.param_frame, 'Lower Bound:', tk.IntVar(), default=50, row=4, col=0)
+        self.n_slice_entry          = ttl.LabelledEntry(self.param_frame, 'Number of Slices:', tk.IntVar(), default=1, row=4, col=2)
         self.trim_switch.dependents = (self.upper_bound_entry, self.slice_decrement_entry, self.lower_bound_entry, self.n_slice_entry)
         
-        self.confirm_train_params =  ttl.ConfirmButton(self.param_frame, self.confirm_tparams, row=5, col=2, cs=2, sticky='e')
+        self.confirm_train_params   = ttl.ConfirmButton(self.param_frame, self.confirm_tparams, row=5, col=2, cs=2, sticky='e')
         self.param_frame.disable()
 
         #General/Misc
-        self.frames = (self.data_frame, self.input_frame, self.hyperparam_frame, self.param_frame)
+        self.frames   = (self.data_frame, self.input_frame, self.hyperparam_frame, self.param_frame)
         self.switches = (self.fam_switch, self.stop_switch, self.trim_switch)
-        self.entries = (self.epoch_entry, self.batchsize_entry, self.learnrate_entry, self.n_slice_entry,
+        self.entries  = (self.epoch_entry, self.batchsize_entry, self.learnrate_entry, self.n_slice_entry,
                         self.upper_bound_entry, self.slice_decrement_entry, self.lower_bound_entry)
-        self.arrays = (self.chem_data, self.species, self.families, self.family_mapping, self.selections, self.hyperparams)
+        self.arrays   = (self.chem_data, self.species, self.families, self.family_mapping, self.selections, self.hyperparams)
 
-        self.exit_button =  tk.Button(self.main, text='Exit', padx=22, pady=22, bg='red', command=self.shutdown)
+        self.exit_button  = tk.Button(self.main, text='Exit', padx=22, pady=22, bg='red', command=self.shutdown)
         self.reset_button = tk.Button(self.main, text='Reset', padx=20, bg='orange', command=self.reset)
         self.exit_button.grid(row=0, column=4)
         self.reset_button.grid(row=4, column=4)
@@ -224,7 +223,7 @@ class PLATINUMS_App:
         self.train_button = tk.Button(self.main, text='TRAIN', padx=20, width=45, bg='dodger blue', state='disabled', command=self.training)
         self.train_button.grid(row=4, column=0)
         self.train_window = None
-        self.summaries = {}
+        self.summaries    = {} # deliberately NOT a member of self.arrays because of the self.reset_training() method
         
     #General Methods
     def isolate(self, on_frame):
@@ -240,13 +239,18 @@ class PLATINUMS_App:
         if messagebox.askokcancel('Exit', 'Are you sure you want to close?'):
             self.main.destroy()
     
+    def update_data_file(self):
+        '''Used to assign the currently selected data file to an internal attribute'''
+        self.data_file = Path(self.chosen_file.get())
+    
     def reset(self):
         '''reset the GUI to the opening state, along with all variables'''
         self.isolate(self.data_frame)
         
         self.read_status.set_status(False)
         self.train_button.configure(state='disabled')
-        self.csv_menu.reset_default()
+        self.json_menu.reset_default()
+        self.update_data_file()
         self.read_mode.set(None)
         self.cycle_fams.set(0)
         self.spectrum_size = 0
@@ -267,13 +271,13 @@ class PLATINUMS_App:
     #Frame 1 (Reading) Methods 
     def import_data(self):
         '''Read in data based on the selected data file'''
-        if self.chosen_file.get() == '--Choose a CSV--':
-            messagebox.showerror('File Error', 'No CSV selected')
+        self.update_data_file()
+        if self.data_file == '--Choose a JSON--':
+            messagebox.showerror('File Error', 'No JSON selected')
         else:
-            #self.read_chem_data()
-            with open(self.chosen_file.get(), 'r') as data_file:
+            with open(self.data_file, 'r') as data_file:
                 self.chem_data, self.species, self.families, self.family_mapping, self.spectrum_size, self.species_count = json.load(data_file).values()
-            self.upper_bound_entry.set_value(self.spectrum_size)
+            self.upper_bound_entry.set_value(self.spectrum_size) # adjust the slicing upper bound to the size of spectra passed
             self.read_status.set_status(True)
             self.isolate(self.input_frame)
     
@@ -291,7 +295,7 @@ class PLATINUMS_App:
 
     def confirm_inputs(self):
         '''Confirm species input selections'''
-        if not self.selections: # if self.selections == []:
+        if not self.selections: 
             messagebox.showerror('No selections made', 'Please select species to evaluate')
         else:
             if self.read_mode.get() == 'By Family':  # pick out species by family if selection by family is made
@@ -318,11 +322,11 @@ class PLATINUMS_App:
         if not self.trim_switch.value: # if RIP trimming is not selected
             self.param_frame.disable()
             self.train_button.configure(state='normal')
-        else:
-            self.num_slices = self.n_slice_entry.get_value()
+        else:  # this comment is a watermark - 2020, timotej bernat
+            self.num_slices      = self.n_slice_entry.get_value()
             self.slice_decrement = self.slice_decrement_entry.get_value()
-            self.trimming_max = self.upper_bound_entry.get_value()
-            self.trimming_min = self.lower_bound_entry.get_value()
+            self.trimming_max    = self.upper_bound_entry.get_value()
+            self.trimming_min    = self.lower_bound_entry.get_value()
                 
             if self.trimming_min < 0 or type(self.trimming_min) != int:
                 messagebox.showerror('Boundary Value Error', 'Trimming Min must be a positive integer')
@@ -348,7 +352,7 @@ class PLATINUMS_App:
 
         # PRE-TRAINING PREPARATIONS TO ENSURE INTERFACE CONTINUITY
         self.reset_training()  # ensure no previous training states are kept before beginning (applies to retrain option specifically)
-        self.train_button.configure(state='disabled') # disable training button while training for idiot-proofing purposes
+        self.train_button.configure(state='disabled') # disable training button while training (for idiot-proofing purposes)
         self.train_window = TrainingWindow(self.main, total_rounds, self.hyperparams['Number of Epochs'], self.training, self.reset, self.train_button)
         self.keras_callbacks.append(TkEpochs(self.train_window))
         
@@ -361,22 +365,21 @@ class PLATINUMS_App:
             # FILE MANAGEMENT FOR TRAIN SETTINGS RECORD AND RESULTS FOLDERS
             start_time = time()    # log start of runtime, will re-log if cycling is enabled
             fam_training = self.fam_switch.value    
-            familiar_str = f'{(fam_training and "F" or "Unf")}amiliar'  # some str formatting based on whether the current training type is familiar or unfamiliar
+            familiar_str = f'{fam_training and "F" or "Unf"}amiliar'  # some str formatting based on whether the current training type is familiar or unfamiliar
             self.train_window.set_familiar_status(familiar_str)
             
             self.train_window.set_status('Creating Folders...') 
-            file_folder_name = re.sub('.\w+\Z', ' Results', str(self.chosen_file.get()))
-            results_folder = Path('Saved Training Results', file_folder_name, f'{self.hyperparams["Number of Epochs"]}-epoch {familiar_str}')
-            if os.path.exists(results_folder):   # prompt user to overwrite file if one already exists
-                if messagebox.askyesno('Duplicates Found', 'Folder with same data settings found;\nOverwrite old folder?'):
+            results_folder = Path('Saved Training Results', f'{self.data_file.stem} Results', f'{self.hyperparams["Number of Epochs"]}-epoch {familiar_str}')
+            if results_folder.exists():   # prompt user to overwrite file if one already exists
+                if messagebox.askyesno('Duplicates Found', 'Folder with same data settings found;\nOverwrite old folder?'): 
                     rmtree(results_folder, ignore_errors=True)
                 else:
                     self.reset_training()
                     return  #terminate prematurely if overwrite permission is not given
-            os.makedirs(results_folder)
+            results_folder.mkdir(parents=True)
 
             with open(results_folder/'Training Settings.txt', 'a') as settings_file:  # make these variables more compact at some point
-                settings_file.write(f'Source File : {self.chosen_file.get()}\n\n')
+                settings_file.write(f'Source File : {self.data_file.name}\n\n')
                 settings_file.write(f'Familiar Training : {fam_training}\n')
                 for hyperparam, value in self.hyperparams.items():
                     settings_file.write(f'{hyperparam} : {value}\n')
@@ -411,11 +414,11 @@ class PLATINUMS_App:
                                 eval_data.append(data)
                                 eval_titles.append(instance)
 
-                                if eval_set_size <= num_spectra:  # add sample spectra to the list of plots up to the number assigned
+                                if eval_set_size <= num_spectra:  # add the specified number of sample spectra to the list of plots
                                     plot_list.append( ((range(lower_bound, upper_bound), data), instance, 's'))
 
                             if iumsutils.isolate_species(instance) != member or fam_training:  # add any instance to the training set, unless its a member
-                                train_set_size += 1                                       # of the current species and unfamiliar trainin is enabled
+                                train_set_size += 1                                            # of the current species and unfamiliar training is enabled
                                 features.append(data)
                                 labels.append(vector)
                                 occurrences[iumsutils.get_family(instance)] += 1
@@ -468,9 +471,9 @@ class PLATINUMS_App:
                         
 
                     # PACKAGING OF ALL PLOTS, APART FROM THE EVALUATION SPECTRA
-                        loss_plot = (hist.history['loss'], 'Training Loss (Final = %0.2f)' % test_loss, 'm') 
+                        loss_plot     = (hist.history['loss'], 'Training Loss (Final = %0.2f)' % test_loss, 'm') 
                         accuracy_plot = (hist.history['accuracy'], 'Training Accuracy (Final = %0.2f%%)' % (100 * test_acc), 'm') 
-                        fermi_plot = (fermi_data, f'{member}, {num_correct}/{eval_set_size} correct', 'f')  
+                        fermi_plot    = (fermi_data, f'{member}, {num_correct}/{eval_set_size} correct', 'f')  
                         
                         predictions.insert(0, [iumsutils.average(column) for column in zip(*predictions)]) # prepend standardized sum of predictions to predictions
                         eval_titles.insert(0, 'Standardized Summation') # prepend label to the above list to the titles list
@@ -494,8 +497,9 @@ class PLATINUMS_App:
 
                     # CREATION OF FOLDERS, IF NECESSARY, AND PLOTS FOR THE CURRENT ROUND
                         self.train_window.set_status('Writing Results to Folders...')    # creating folders as necessary, writing results to folders 
-                        if not os.path.exists(results_folder/point_range):                                                           
-                            os.makedirs(results_folder/point_range)
+                        point_folder = results_folder/point_range # folder containing results for the current spectrum slice 
+                        if not point_folder.exists():                                                           
+                            point_folder.mkdir(parents=True)
                         iumsutils.adagraph(plot_list, 6, results_folder/point_range/member)
         
             # DISTRIBUTION OF SUMMARY DATA TO APPROPRIATE RESPECTIVE FOLDERS
@@ -526,6 +530,7 @@ class PLATINUMS_App:
                             parent=self.train_window.training_window)  # ensure the message originates from the training window's root
     
     def reset_training(self):
+        '''Dedicated reset method for the training cycle, necessary to allow for cycling and retraining'''
         if self.train_window: # if a window already exists
             self.train_window.destroy()
             self.train_window = None
