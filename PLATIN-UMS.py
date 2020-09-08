@@ -66,7 +66,7 @@ class TrainingWindow(): # NOTE: add 'Save Weights' Button!!
         self.epoch_label    = tk.Label(self.status_frame, text='Training Epoch: ')
         self.epoch_progress = ttl.NumberedProgBar(self.status_frame, num_epochs, style_num=2, row=4, col=1) 
         self.status_label   = tk.Label(self.status_frame, text='Current Status: ')
-        self.curr_status    =  tk.Label(self.status_frame)
+        self.curr_status    = tk.Label(self.status_frame)
         
         self.member_label.grid(  row=0, column=0)
         self.curr_member.grid(   row=0, column=1, sticky='w')
@@ -150,7 +150,7 @@ class PLATINUMS_App:
         self.data_frame  = ttl.ToggleFrame(self.main, 'Select JSON to Read: ', padx=21, pady=5)
         self.chosen_file = tk.StringVar()
         self.data_file = None
-        self.chem_data, self.species, self.families, self.family_mapping, self.spectrum_size, self.species_count = {}, [], [], {}, 0, Counter()
+        self.chem_data, self.species, self.families, self.family_mapping, self.spectrum_size, self.species_count = {}, [], [], {}, 0, {}
         
         self.json_menu      = ttl.DynOptionMenu(self.data_frame, self.chosen_file, lambda : iumsutils.get_by_filetype('.json'), default='--Choose a JSON--', width=28, colspan=2)
         self.read_label     = tk.Label(self.data_frame, text='Read Status:')
@@ -213,7 +213,8 @@ class PLATINUMS_App:
         self.switches = (self.fam_switch, self.stop_switch, self.trim_switch)
         self.entries  = (self.epoch_entry, self.batchsize_entry, self.learnrate_entry, self.n_slice_entry,
                         self.upper_bound_entry, self.slice_decrement_entry, self.lower_bound_entry)
-        self.arrays   = (self.chem_data, self.species, self.families, self.family_mapping, self.selections, self.hyperparams)
+        self.arrays   = (self.chem_data, self.species, self.families, self.family_mapping, self.species_count, self.selections, self.hyperparams)
+        # consider eliminating arrays and moving all lists directly to the reset method
 
         self.exit_button  = tk.Button(self.main, text='Exit', padx=22, pady=22, bg='red', command=self.shutdown)
         self.reset_button = tk.Button(self.main, text='Reset', padx=20, bg='orange', command=self.reset)
@@ -310,7 +311,7 @@ class PLATINUMS_App:
         self.hyperparams['Batch Size'] = self.batchsize_entry.get_value()
         self.hyperparams['Learn Rate'] = self.learnrate_entry.get_value()  
         self.isolate(self.param_frame)
-        self.trim_switch.disable()   #ensures that the trimming menu stays greyed out, not necessary for the other switches 
+        self.trim_switch.disable()   # ensures that the trimming menu stays greyed out, not necessary for the other switches 
     
     
     #Frame 4 (training parameter) Methods
@@ -467,7 +468,7 @@ class PLATINUMS_App:
                                 num_correct += 1
                                 
                         targets.sort(reverse=True)
-                        fermi_data = [AAV/max(targets) for AAV in targets]
+                        fermi_data = iumsutils.normalized(targets)
                         
 
                     # PACKAGING OF ALL PLOTS, APART FROM THE EVALUATION SPECTRA
