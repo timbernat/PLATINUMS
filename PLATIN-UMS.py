@@ -19,7 +19,7 @@ from sklearn.model_selection import train_test_split
 import tensorflow as tf     # Neural Net Libraries
 from tensorflow.keras import metrics                  
 from tensorflow.keras.optimizers import Adam
-from tensorflow.keras.models import Sequential
+from tensorflow.keras.models import Sequential, load_model
 from tensorflow.keras.layers import Dense, Dropout
 from tensorflow.keras.callbacks import EarlyStopping, Callback
 
@@ -38,16 +38,16 @@ class TkEpochs(Callback):
         if self.tw.end_training:
             self.model.stop_training = True
         
-class TrainingWindow(): # NOTE: add 'Save Weights' Button!!
+class TrainingWindow(): 
     '''The window which displays training progress, was easier to subclass outside of the main GUI class'''
-    def __init__(self, main, total_rounds, num_epochs, train_funct, reset_funct, train_button):
+    def __init__(self, main, total_rounds, num_epochs, train_funct, reset_funct, exit_funct, train_button):
         self.total_rounds = total_rounds
         self.num_epochs = num_epochs
         self.main = main
         self.train_button = train_button
         self.training_window = tk.Toplevel(main)
         self.training_window.title('Training Progress')
-        self.training_window.geometry('390x163')
+        self.training_window.geometry('390x189')
         self.training_window.attributes('-topmost', True)
         self.end_training = False
         
@@ -81,23 +81,27 @@ class TrainingWindow(): # NOTE: add 'Save Weights' Button!!
         self.status_label.grid(  row=5, column=0)
         self.curr_status.grid(   row=5, column=1, sticky='w')
         
-        self.reset()
+        self.reset() # ensure menu begins at default status when instantiated
     
         #Training Buttons
         self.button_frame   = ttl.ToggleFrame(self.training_window, '', padx=0, pady=0, row=1)
         self.retrain_button = tk.Button(self.button_frame, text='Retrain', width=17, bg='dodger blue', command=train_funct)
         self.reinput_button = tk.Button(self.button_frame, text='Reset', width=17, bg='orange', command=reset_funct)
-        self.abort_button   = tk.Button(self.button_frame, text='Abort Training', width=17, bg='red', command=self.abort)
+        self.exit_button    = tk.Button(self.button_frame, text='Exit', width=17, bg='red', command=exit_funct)
         
         self.retrain_button.grid(row=0, column=0)
         self.reinput_button.grid(row=0, column=1)
-        self.abort_button.grid(  row=0, column=2) 
+        self.exit_button.grid(   row=0, column=2) 
         
         self.button_frame.disable()
-        self.abort_button.configure(state='normal')
+        
+        # Abort Button, standalone and frameless
+        self.abort_button = tk.Button(self.training_window, text='Abort Training', width=54, bg='sienna2', command=self.abort)
+        self.abort_button.grid(row=2, column=0)
         
     def abort(self):
         self.end_training = True
+        self.button_frame.enable()
         self.reset()
         
     def reset(self):
@@ -143,7 +147,7 @@ class PLATINUMS_App:
         
         #Main Window
         self.main = main
-        self.main.title('PLATIN-UMS 4.3.6-alpha')
+        self.main.title('PLATIN-UMS 4.3.9-alpha')
         self.main.geometry('445x420')
 
         #Frame 1
@@ -196,7 +200,7 @@ class PLATINUMS_App:
         self.trim_switch = ttl.Switch(self.param_frame, 'RIP Trimming: ', row=2, col=1)
 
         self.cycle_fams   = tk.IntVar()
-        self.cycle_button = tk.Checkbutton(self.param_frame, text='Cycle', variable=self.cycle_fams)
+        self.cycle_button = tk.Checkbutton(self.param_frame, text='Cycle?', variable=self.cycle_fams)
         self.cycle_button.grid(row=0, column=3)
         
         self.upper_bound_entry      = ttl.LabelledEntry(self.param_frame, 'Upper Bound:', tk.IntVar(), default=400, row=3, col=0)
@@ -204,6 +208,10 @@ class PLATINUMS_App:
         self.lower_bound_entry      = ttl.LabelledEntry(self.param_frame, 'Lower Bound:', tk.IntVar(), default=50, row=4, col=0)
         self.n_slice_entry          = ttl.LabelledEntry(self.param_frame, 'Number of Slices:', tk.IntVar(), default=1, row=4, col=2)
         self.trim_switch.dependents = (self.upper_bound_entry, self.slice_decrement_entry, self.lower_bound_entry, self.n_slice_entry)
+        
+        self.save_weights = tk.IntVar()
+        self.save_button  = tk.Checkbutton(self.param_frame, text='Save Models after Training?', variable=self.save_weights)
+        self.save_button.grid(row=5, column=0, columnspan=2, sticky='w')
         
         self.confirm_train_params   = ttl.ConfirmButton(self.param_frame, self.confirm_tparams, row=5, col=2, cs=2, sticky='e')
         self.param_frame.disable()
@@ -225,7 +233,7 @@ class PLATINUMS_App:
         self.train_button.grid(row=4, column=0)
         self.train_window = None
         self.summaries    = {} # deliberately NOT a member of self.arrays because of the self.reset_training() method
-        
+
     #General Methods
     def isolate(self, on_frame):
         '''Enable just one frame.'''
@@ -254,6 +262,7 @@ class PLATINUMS_App:
         self.update_data_file()
         self.read_mode.set(None)
         self.cycle_fams.set(0)
+        self.save_weights.set(0)
         self.spectrum_size = 0
         
         for switch in self.switches:
@@ -354,10 +363,11 @@ class PLATINUMS_App:
         # PRE-TRAINING PREPARATIONS TO ENSURE INTERFACE CONTINUITY
         self.reset_training()  # ensure no previous training states are kept before beginning (applies to retrain option specifically)
         self.train_button.configure(state='disabled') # disable training button while training (for idiot-proofing purposes)
-        self.train_window = TrainingWindow(self.main, total_rounds, self.hyperparams['Number of Epochs'], self.training, self.reset, self.train_button)
+        self.train_window = TrainingWindow(self.main, total_rounds, self.hyperparams['Number of Epochs'], self.training, self.reset, self.shutdown, self.train_button)
         self.keras_callbacks.append(TkEpochs(self.train_window))
         
         # ACTUAL TRAINING CYCLE BEGINS
+        save_weights = self.save_weights.get() #  flag for whether or not to save model weights after each training loop
         for familiar_cycling in range(1 + self.cycle_fams.get()):  # if cycling is enabled, run throught the training twice, toggling familiar status in between      
             if familiar_cycling:
                 self.fam_switch.toggle()  # toggle the unfamiliar status the second time through (only occurs if cycling is enabled)
@@ -450,10 +460,14 @@ class PLATINUMS_App:
                                          epochs=self.hyperparams['Number of Epochs'], batch_size=self.hyperparams['Batch Size'])
                         test_loss, test_acc = model.evaluate(x_test, y_test, verbose=(verbosity and 2 or 0))  # keras' self evaluation of loss and accuracy metrics
 
-                        if self.train_window.end_training:  # condition to escape training loop of training is aborted
+                        if self.train_window.end_training:  # condition to escape training loop if training is aborted
                             messagebox.showerror('Training has Stopped!', 'Training aborted by user;\nProceed from Progress Window')
                             self.train_window.button_frame.enable()
                             return     # without this, aborting training only pauses one iteration of loop
+                        
+                        if save_weights: # if training has not been aborted and saving is enabled, save the model to the current result directory
+                            self.train_window.set_status('Saving Model...')
+                            model.save(str(results_folder/point_range/f'{member} Model Files')) # path can only be str, for some reason
 
                     # PREDICTION OVER EVALUATION SET, EVALUATION OF PERFORMANCE                 
                         targets, num_correct = [], 0    # produce prediction values using the model and determine the accuracy of these predictions
@@ -501,12 +515,12 @@ class PLATINUMS_App:
                         point_folder = results_folder/point_range # folder containing results for the current spectrum slice 
                         if not point_folder.exists():                                                           
                             point_folder.mkdir(parents=True)
-                        iumsutils.adagraph(plot_list, 6, results_folder/point_range/member)
+                        iumsutils.adagraph(plot_list, 6, save_dir=results_folder/point_range/member)
         
             # DISTRIBUTION OF SUMMARY DATA TO APPROPRIATE RESPECTIVE FOLDERS
             self.train_window.set_status('Distributing Result Summaries...')  
             for point_range, (fermi_data, score_data) in self.summaries.items(): 
-                iumsutils.adagraph(fermi_data, 5, results_folder/point_range/'Fermi Summary.png')
+                iumsutils.adagraph(fermi_data, 5, save_dir=results_folder/point_range/'Fermi Summary.png')
 
                 with open(results_folder/point_range/'Scores.txt', 'a') as score_file:
                     for family, (names, scores) in score_data.items():
@@ -525,7 +539,8 @@ class PLATINUMS_App:
                 settings_file.write(f'\nTraining Time : {runtime}')   
         
         # POST-TRAINING WRAPPING-UP
-        self.train_window.button_frame.enable()
+        self.train_window.button_frame.enable()  # open up post-training options in the training window
+        self.train_window.abort_button.configure(state='disabled') # disable the abort button (idiotproofing against its use after training)
         self.train_window.set_status('Finished')
         messagebox.showinfo('Training Completed Succesfully!', f'Training results can be found in folder:\n{results_folder.parents[0]}',
                             parent=self.train_window.training_window)  # ensure the message originates from the training window's root
