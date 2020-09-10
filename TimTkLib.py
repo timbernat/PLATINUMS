@@ -68,15 +68,11 @@ class NumberedProgBar():
         self.total = total
         self.style = ttk.Style(frame)
         
-        self.style_name = f'text.Horizontal.TProgressbar{style_num}'
+        self.style_name = f'NumberedProgBar{style_num}'
         self.style.layout(self.style_name, 
              [('Horizontal.Progressbar.trough', {'children': [('Horizontal.Progressbar.pbar', {'side': 'left', 'sticky': 'ns'})],
                                                  'sticky': 'nswe'}),
               ('Horizontal.Progressbar.label', {'sticky': ''})]) 
-        
-        #s.layout("LabeledProgressbar",
-             #[('LabeledProgressbar.trough', {'children': [('LabeledProgressbar.pbar',{'side': 'left', 'sticky': 'ns'}),("LabeledProgressbar.label",{"sticky": ""})]
-                                             #,'sticky': 'nswe'})])
         
         self.prog_bar = ttk.Progressbar(frame, style=self.style_name, orient='horizontal', length=length, maximum=total)
         self.prog_bar.grid(row=row, column=col, columnspan=cs)
@@ -250,9 +246,9 @@ class CheckPanel:
         
 class SelectionWindow:
     '''The window used in -IUMS programs to select species for evaluation'''
-    def __init__(self, main, parent_frame, size, selections, output, ncols=1):
+    def __init__(self, main, parent_frame, size, selections, output, window_title='Select Members to Include', ncols=1):
         self.window = tk.Toplevel(main)
-        self.window.title('Select Members to Include')
+        self.window.title(window_title)
         self.window.geometry(size)
         self.parent = parent_frame
         self.parent.disable()
