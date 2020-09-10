@@ -1,305 +1,559 @@
-import csv, json, math, re
+# Custom Imports
+import iumsutils           # library of functions specific to my "-IUMS" class of IMS Neural Network applications
+import TimTkLib as ttl     # library of custom tkinter widgets I've written to make GUI assembly more straightforward 
+
+# Built-in Imports
+import json
+from time import time                      
+from datetime import timedelta
 from pathlib import Path
+from shutil import rmtree
 from collections import Counter
+import tkinter as tk    # Built-In GUI imports
+from tkinter import messagebox
 
-import matplotlib.pyplot as plt
+# PIP-installed Imports                
 import numpy as np
-from scipy.signal import savgol_filter
+from sklearn.model_selection import train_test_split
 
-# general-use methods to ease may common tasks
-def average(iterable, precision=None):
-    '''Calculate and return average of an iterable'''
-    avg = sum(iterable)/len(iterable)
-    if precision:
-        avg = round(avg, precision)
-    return avg
+import tensorflow as tf     # Neural Net Libraries
+from tensorflow.keras import metrics                  
+from tensorflow.keras.optimizers import Adam
+from tensorflow.keras.models import Sequential, load_model
+from tensorflow.keras.layers import Dense, Dropout
+from tensorflow.keras.callbacks import EarlyStopping, Callback
 
-def standard_dev(iterable):
-    '''Calculate the standard deviation of an iterable'''
-    avg = average(iterable)  # done to avoid repeated calculation of average for every term
-    return (sum((i - avg)**2 for i in iterable)/len(iterable))**0.5
 
-def normalized(iterable):
-    '''Normalize an iterable using min-max feature scaling (casts all values between 0 and 1)'''
-    return tuple( (i - min(iterable))/(max(iterable) - min(iterable)) for i in iterable)
-
-def get_by_filetype(extension):  # NOTE: make this check for correct formatting as well
-    '''Get all files of a particular file type present in the current directory'''
-    filetypes_present = tuple(file.name for file in Path.cwd().iterdir() if file.suffix == extension)
-    if filetypes_present == ():
-        filetypes_present = (None,)
-    return filetypes_present
-
-def isolate_species(instance_name): # NOTE: consider expanding range of allowable strings in the future
-    '''Strips extra numbers off the end of the name of an instance in a csv and just tells you its species'''
-    return re.sub('(\s|-)\d+\s*\Z', '', instance_name)  # regex to crop terminal digits off of an instance in a variety of possible formats
-
-def get_family(species):
-    '''Takes the name of a species OR of an instance and returns the chemical family that that species belongs to;
-    determination is based on IUPAC naming conventions by suffix'''
-    iupac_suffices = {  'ate':'Acetates', # Esters might be preferable outside the context of the current datasets
-                        'ol':'Alcohols',
-                        'al':'Aldehydes',
-                        'ane':'Alkanes',
-                        'ene':'Alkenes',
-                        'yne':'Alkynes',
-                        'ine':'Amines',
-                        'oic acid': 'Carboxylic Acids',
-                        'ether':'Ethers',
-                        'one':'Ketones'  }                    
-    for suffix, family in iupac_suffices.items():
-        if re.search(f'(?i){suffix}\Z', isolate_species(species)):   #ignore capitalization (particular to ethers), only check end of name (particular to pinac<ol>one)
-            return family
-
-def adagraph(plot_list, ncols, save_dir=None, display_size=20):  # ADD AXIS LABELS, SUBCLASS BUNDLED PLOT OBJECTS
-        '''a general tidy internal graphing utility of my own devising, used to produce all manner of plots during training with one function'''
-        nrows = math.ceil(len(plot_list)/ncols)  #  determine the necessary number of rows needed to accomodate the data
-        fig, axs = plt.subplots(nrows, ncols, figsize=(display_size, display_size * nrows/ncols)) 
+# SECTION 1 : custom classes needed to operate some features of the main GUI  ---------------------------------------------------                   
+class TkEpochs(Callback):   
+    '''A custom keras Callback which mediates interaction between the training window and the model training/Keras'''
+    def __init__(self, train_window):
+        super(TkEpochs, self).__init__()
+        self.tw = train_window
+    
+    def on_epoch_begin(self, epoch, logs=None): # update the epoch progress bar at the start of each epoch
+        self.tw.set_epoch_progress(epoch + 1)
         
-        for idx, (plot_data, plot_title, plot_type) in enumerate(plot_list):                         
-            if nrows > 1:                        # locate the current plot, unpack linear index into coordinate
-                row, col = divmod(idx, ncols)      
-                curr_plot = axs[row][col]  
-            else:                                # special case for indexing plots with only one row; my workaround of implementation in matplotlib
-                curr_plot = axs[idx]    
-            curr_plot.set_title(plot_title)
-            
-            # enumerate plot conditions by plot type, plan to generalize this later with a custom class BundledPlot()
-            if plot_type == 's':                 # for plotting spectra
-                curr_plot.plot(*plot_data, 'c-') # unpacking accounts for shift in x-boundaries if RIP trimming is occuring
-            elif plot_type == 'm':               # for plotting metrics from training
-                curr_plot.plot(plot_data, ('Loss' in plot_title and 'r-' or 'g-')) 
-            elif plot_type == 'f':               # for plotting fermi-dirac plots
-                curr_plot.plot(plot_data, 'm-')  
-                curr_plot.set_ylim(0, 1.05)
-            elif plot_type == 'p':               # for plotting predictions
-                curr_plot.bar(*plot_data, color=('Summation' in plot_title and 'r' or 'b'))  # unpacking accounts for column labels by family for predictions
-                curr_plot.set_ylim(0,1)
-                curr_plot.tick_params(axis='x', labelrotation=45)
-            elif plot_type == 'v':               # for plotting variation in noise by family
-                (minima, averages, maxima) = plot_data
-                curr_plot.set_xlabel('Point Number')
-                curr_plot.set_ylabel('Intensity')
-                curr_plot.plot(maxima, 'b-', averages, 'r-', minima, 'g-') 
-                curr_plot.legend(['Maximum', 'Average', 'Minimum'], loc='upper left')
-        plt.tight_layout()
-        if not save_dir: # consider adding a show AND plot option, not at all necessary now, however
-            plt.show()
+    def on_epoch_end(self, epoch, logs=None):  # abort training if the abort flag has been raised by the training window
+        if self.tw.end_training:
+            self.model.stop_training = True
+        
+class TrainingWindow(): 
+    '''The window which displays training progress, was easier to subclass outside of the main GUI class'''
+    def __init__(self, main, total_rounds, num_epochs, train_funct, reset_funct, exit_funct, train_button):
+        self.total_rounds = total_rounds
+        self.num_epochs = num_epochs
+        self.main = main
+        self.train_button = train_button
+        self.training_window = tk.Toplevel(main)
+        self.training_window.title('Training Progress')
+        self.training_window.geometry('390x189')
+        self.training_window.attributes('-topmost', True)
+        self.end_training = False
+        
+        # Status Printouts
+        self.status_frame = tk.Frame(self.training_window, bd=2, padx=20, relief='groove')
+        self.status_frame.grid(row=0, column=0)
+        
+        self.member_label   = tk.Label(self.status_frame, text='Current Species: ')
+        self.curr_member    = tk.Label(self.status_frame)
+        self.slice_label    = tk.Label(self.status_frame, text='Current Data Slice: ')
+        self.curr_slice     = tk.Label(self.status_frame)
+        self.fam_label      = tk.Label(self.status_frame, text='Training Type: ')
+        self.curr_fam       = tk.Label(self.status_frame)
+        self.round_label    = tk.Label(self.status_frame, text='Training Round: ')
+        self.round_progress = ttl.NumberedProgBar(self.status_frame, total_rounds, row=3, col=1)
+        self.epoch_label    = tk.Label(self.status_frame, text='Training Epoch: ')
+        self.epoch_progress = ttl.NumberedProgBar(self.status_frame, num_epochs, style_num=2, row=4, col=1) 
+        self.status_label   = tk.Label(self.status_frame, text='Current Status: ')
+        self.curr_status    = tk.Label(self.status_frame)
+        
+        self.member_label.grid(  row=0, column=0)
+        self.curr_member.grid(   row=0, column=1, sticky='w')
+        self.slice_label.grid(   row=1, column=0)
+        self.curr_slice.grid(    row=1, column=1, sticky='w')
+        self.fam_label.grid(     row=2, column=0)
+        self.curr_fam.grid(      row=2, column=1, sticky='w')
+        self.round_label.grid(   row=3, column=0)
+        #self.round_progress, like all ttl widgets, has gridding built-in
+        self.epoch_label.grid(   row=4, column=0)
+        #self.epoch_progress, like all ttl widgets, has gridding built-in
+        self.status_label.grid(  row=5, column=0)
+        self.curr_status.grid(   row=5, column=1, sticky='w')
+        
+        self.reset() # ensure menu begins at default status when instantiated
+    
+        #Training Buttons
+        self.button_frame   = ttl.ToggleFrame(self.training_window, '', padx=0, pady=0, row=1)
+        self.retrain_button = tk.Button(self.button_frame, text='Retrain', width=17, bg='dodger blue', command=train_funct)
+        self.reinput_button = tk.Button(self.button_frame, text='Reset', width=17, bg='orange', command=reset_funct)
+        self.exit_button    = tk.Button(self.button_frame, text='Exit', width=17, bg='red', command=exit_funct)
+        
+        self.retrain_button.grid(row=0, column=0)
+        self.reinput_button.grid(row=0, column=1)
+        self.exit_button.grid(   row=0, column=2) 
+        
+        self.button_frame.disable()
+        
+        # Abort Button, standalone and frameless
+        self.abort_button = tk.Button(self.training_window, text='Abort Training', width=54, bg='sienna2', command=self.abort)
+        self.abort_button.grid(row=2, column=0)
+        
+    def abort(self):
+        self.end_training = True
+        self.button_frame.enable()
+        self.reset()
+        
+    def reset(self):
+        self.set_member('---')
+        self.set_slice('---')
+        self.set_familiar_status('---')
+        self.set_round_progress(0)
+        self.set_epoch_progress(0)
+        self.set_status('Standby')
+    
+    def set_readout(self, readout, value):
+        '''Base method for updating a readout on the menu'''
+        readout.configure(text=value)
+        self.main.update()
+    
+    def set_member(self, member):
+        self.set_readout(self.curr_member, member)
+    
+    def set_slice(self, data_slice):
+        self.set_readout(self.curr_slice, data_slice)
+    
+    def set_status(self, status):
+        self.set_readout(self.curr_status, status)
+        
+    def set_familiar_status(self, fam_status):
+        self.set_readout(self.curr_fam, fam_status)
+    
+    def set_round_progress(self, curr_round):
+        self.round_progress.set_progress(curr_round)
+        self.main.update()
+        
+    def set_epoch_progress(self, curr_epoch):
+        self.epoch_progress.set_progress(curr_epoch)
+        self.main.update()
+        
+    def destroy(self):
+        self.train_button.configure(state='normal')
+        self.training_window.destroy()
+        
+# Section 2: Start of code for the actual GUI and application ---------------------------------------------------------------------------------------
+class PLATINUMS_App:
+    def __init__(self, main):
+        
+        #Main Window
+        self.main = main
+        self.main.title('PLATIN-UMS 4.4.0-alpha')
+        self.main.geometry('445x420')
+
+        #Frame 1
+        self.data_frame  = ttl.ToggleFrame(self.main, 'Select JSON to Read: ', padx=21, pady=5)
+        self.chosen_file = tk.StringVar()
+        self.data_file = None
+        self.chem_data, self.species, self.families, self.family_mapping, self.spectrum_size, self.species_count = {}, [], [], {}, 0, {}
+        
+        self.json_menu      = ttl.DynOptionMenu(self.data_frame, self.chosen_file, lambda : iumsutils.get_by_filetype('.json'), default='--Choose a JSON--', width=28, colspan=2)
+        self.read_label     = tk.Label(self.data_frame, text='Read Status:')
+        self.read_status    = ttl.StatusBox(self.data_frame, on_message='JSON Read!', off_message='No File Read', row=1, col=1)
+        self.refresh_button = tk.Button(self.data_frame, text='Refresh JSONs', command=self.json_menu.update, padx=11)
+        self.confirm_data   = ttl.ConfirmButton(self.data_frame, self.import_data, padx=2, row=1, col=2)
+        
+        self.refresh_button.grid(row=0, column=2)
+        self.read_label.grid(    row=1, column=0)
+        
+        #Frame 2
+        self.input_frame = ttl.ToggleFrame(self.main, 'Select Instances to Evaluate: ', padx=5, pady=5, row=1)
+        self.read_mode   = tk.StringVar()
+        self.read_mode.set(None)
+        self.selections  = []
+        
+        for i, mode in enumerate(('Select All', 'By Family', 'By Species')):
+            button = tk.Radiobutton(self.input_frame, text=mode, value=mode, var=self.read_mode, command=self.further_sel)
+            button.grid(row=0, column=i)
+        self.confirm_sels = ttl.ConfirmButton(self.input_frame, self.confirm_inputs, row=0, col=3, sticky='e')
+        self.input_frame.disable()
+        
+        #Frame 3
+        self.hyperparams = {}
+        
+        self.hyperparam_frame    = ttl.ToggleFrame(self.main, 'Set Hyperparameters: ', padx=8, pady=5, row=2)
+        self.epoch_entry         = ttl.LabelledEntry(self.hyperparam_frame, 'Epochs:', tk.IntVar(), width=19, default=2048)
+        self.batchsize_entry     = ttl.LabelledEntry(self.hyperparam_frame, 'Batchsize:', tk.IntVar(), width=19, default=32, row=1)
+        self.learnrate_entry     = ttl.LabelledEntry(self.hyperparam_frame, 'Learnrate:', tk.DoubleVar(), width=18, default=2e-5, col=3)
+        self.confirm_hyperparams = ttl.ConfirmButton(self.hyperparam_frame, self.confirm_hp, row=1, col=3, cs=2, sticky='e')
+        self.hyperparam_frame.disable()
+        
+        #Frame 4
+        self.trimming_min = None
+        self.trimming_max = None
+        self.slice_decrement = None
+        self.num_slices = None
+        self.keras_callbacks = []
+        
+        self.param_frame = ttl.ToggleFrame(self.main, 'Set Training Parameters: ', padx=9, pady=5, row=3) 
+        self.fam_switch  = ttl.Switch(self.param_frame, 'Familiar Training :', row=0, col=1)
+        self.stop_switch = ttl.Switch(self.param_frame, 'Early Stopping: ', row=1, col=1)
+        self.trim_switch = ttl.Switch(self.param_frame, 'RIP Trimming: ', row=2, col=1)
+
+        self.cycle_fams   = tk.IntVar()
+        self.cycle_button = tk.Checkbutton(self.param_frame, text='Cycle?', variable=self.cycle_fams)
+        self.cycle_button.grid(row=0, column=3)
+        
+        self.upper_bound_entry      = ttl.LabelledEntry(self.param_frame, 'Upper Bound:', tk.IntVar(), default=400, row=3, col=0)
+        self.slice_decrement_entry  = ttl.LabelledEntry(self.param_frame, 'Slice Decrement:', tk.IntVar(), default=20, row=3, col=2)
+        self.lower_bound_entry      = ttl.LabelledEntry(self.param_frame, 'Lower Bound:', tk.IntVar(), default=50, row=4, col=0)
+        self.n_slice_entry          = ttl.LabelledEntry(self.param_frame, 'Number of Slices:', tk.IntVar(), default=1, row=4, col=2)
+        self.trim_switch.dependents = (self.upper_bound_entry, self.slice_decrement_entry, self.lower_bound_entry, self.n_slice_entry)
+        
+        self.save_weights = tk.IntVar()
+        self.save_button  = tk.Checkbutton(self.param_frame, text='Save Models after Training?', variable=self.save_weights)
+        self.save_button.grid(row=5, column=0, columnspan=2, sticky='w')
+        
+        self.confirm_train_params   = ttl.ConfirmButton(self.param_frame, self.confirm_tparams, row=5, col=2, cs=2, sticky='e')
+        self.param_frame.disable()
+
+        #General/Misc
+        self.frames   = (self.data_frame, self.input_frame, self.hyperparam_frame, self.param_frame)
+        self.switches = (self.fam_switch, self.stop_switch, self.trim_switch)
+        self.entries  = (self.epoch_entry, self.batchsize_entry, self.learnrate_entry, self.n_slice_entry,
+                        self.upper_bound_entry, self.slice_decrement_entry, self.lower_bound_entry)
+
+        self.exit_button  = tk.Button(self.main, text='Exit', padx=22, pady=22, bg='red', command=self.shutdown)
+        self.reset_button = tk.Button(self.main, text='Reset', padx=20, bg='orange', command=self.reset)
+        self.exit_button.grid(row=0, column=4)
+        self.reset_button.grid(row=4, column=4)
+        
+        self.train_button = tk.Button(self.main, text='TRAIN', padx=20, width=45, bg='dodger blue', state='disabled', command=self.training)
+        self.train_button.grid(row=4, column=0)
+        self.train_window = None
+        self.summaries    = {}
+
+    #General Methods
+    def isolate(self, on_frame):
+        '''Enable just one frame.'''
+        for frame in self.frames:
+            if frame == on_frame:
+                frame.enable()
+            else:
+                frame.disable()   
+    
+    def shutdown(self):
+        '''Close the application, with confirm prompt'''
+        if messagebox.askokcancel('Exit', 'Are you sure you want to close?'):
+            self.main.destroy()
+    
+    def update_data_file(self):
+        '''Used to assign the currently selected data file to an internal attribute'''
+        self.data_file = Path(self.chosen_file.get())
+    
+    def reset(self):
+        '''reset the GUI to the opening state, along with all variables'''
+        self.isolate(self.data_frame)
+        
+        self.read_status.set_status(False)
+        self.train_button.configure(state='disabled')
+        self.json_menu.reset_default()
+        self.update_data_file()
+        self.read_mode.set(None)
+        self.cycle_fams.set(0)
+        self.save_weights.set(0)
+        self.spectrum_size = 0
+        
+        for switch in self.switches:
+            switch.disable()
+        
+        for entry in self.entries:
+            entry.reset_default()
+        
+        # include all array attributes for resetting here (excluding self.summaries and self.keras_callbacks, which are already covered by self.reset_training())
+        for array in (self.chem_data, self.species, self.families, self.family_mapping,
+                      self.species_count, self.selections, self.hyperparams):
+            array.clear()
+        
+        self.reset_training() 
+        self.main.lift() # bring main window to forefront
+
+                
+    #Frame 1 (Reading) Methods 
+    def import_data(self):
+        '''Read in data based on the selected data file'''
+        self.update_data_file()
+        if self.data_file == '--Choose a JSON--':
+            messagebox.showerror('File Error', 'No JSON selected')
         else:
-            plt.savefig(save_dir)
-        plt.close('all')
+            with open(self.data_file, 'r') as data_file:
+                self.chem_data, self.species, self.families, self.family_mapping, self.spectrum_size, self.species_count = json.load(data_file).values()
+            self.upper_bound_entry.set_value(self.spectrum_size) # adjust the slicing upper bound to the size of spectra passed
+            self.read_status.set_status(True)
+            self.isolate(self.input_frame)
+    
+    
+    #Frame 2 (Input) Methods
+    def further_sel(self): 
+        '''logic for selection of members to include in training, based on the chosen selection mode'''
+        self.selections.clear()
+        if self.read_mode.get() == 'Select All':
+            self.selections = self.species
+        elif self.read_mode.get() == 'By Species':
+            ttl.SelectionWindow(self.main, self.input_frame, '950x190', self.species, self.selections, window_title='Select Species to evaluate', ncols=8)
+        elif self.read_mode.get() == 'By Family':
+            ttl.SelectionWindow(self.main, self.input_frame, '270x85', self.families, self.selections, window_title='Select Families to evaluate over', ncols=3)
+
+    def confirm_inputs(self):
+        '''Confirm species input selections'''
+        if not self.selections: 
+            messagebox.showerror('No selections made', 'Please select species to evaluate')
+        else:
+            if self.read_mode.get() == 'By Family':  # pick out species by family if selection by family is made
+                self.selections = [species for species in self.species if iumsutils.get_family(species) in self.selections]
+            self.isolate(self.hyperparam_frame)
+
+    
+    # Frame 3 (hyperparameter) Methods
+    def confirm_hp(self):
+        '''Confirm hyperparameter selections'''
+        self.hyperparams['Number of Epochs'] = self.epoch_entry.get_value()
+        self.hyperparams['Batch Size'] = self.batchsize_entry.get_value()
+        self.hyperparams['Learn Rate'] = self.learnrate_entry.get_value()  
+        self.isolate(self.param_frame)
+        self.trim_switch.disable()   # ensures that the trimming menu stays greyed out, not necessary for the other switches 
+    
+    
+    #Frame 4 (training parameter) Methods
+    def confirm_tparams(self):
+        '''Confirm training parameter selections, perform pre-training error checks if necessary'''
+        if self.stop_switch.value:
+            self.keras_callbacks.append(EarlyStopping(monitor='loss', mode='min', verbose=1, patience=8))  # optimize patience, eventually
+        
+        if not self.trim_switch.value: # if RIP trimming is not selected
+            self.param_frame.disable()
+            self.train_button.configure(state='normal')
+        else:  # this comment is a watermark - 2020, timotej bernat
+            self.num_slices      = self.n_slice_entry.get_value()
+            self.slice_decrement = self.slice_decrement_entry.get_value()
+            self.trimming_max    = self.upper_bound_entry.get_value()
+            self.trimming_min    = self.lower_bound_entry.get_value()
+                
+            if self.trimming_min < 0 or type(self.trimming_min) != int:
+                messagebox.showerror('Boundary Value Error', 'Trimming Min must be a positive integer')
+            elif self.trimming_max < 0 or type(self.trimming_max) != int:
+                messagebox.showerror('Boundary Value Error', 'Trimming Max must be a positive integer')
+            elif self.trimming_max > self.spectrum_size:                            
+                messagebox.showerror('Limit too high', 'Upper bound greater than data size, please decrease "Upper Bound"')
+            elif self.trimming_max - self.num_slices*self.slice_decrement <= self.trimming_min:  
+                messagebox.showerror('Boundary Mismatch', 'Upper limit will not always exceed lower;\nDecrease either slice decrement or lower bound')
+            else:
+                self.param_frame.disable()
+                self.train_button.configure(state='normal')
         
         
-# file conversion methods - csv to json and vice versa-------------------------------------------------------------------------------------------------
-def jsonize(source_file_name): 
-    '''Process spectral data csvs, generating labels, vector mappings, species counts, and other information,
-    then cast the data to a json for ease of data reading in other applications and methods'''
-    chem_data, species, families, family_mapping, spectrum_size, species_count = ({}, set(), set(), {}, 0, Counter())
-    with open(f'{source_file_name}.csv', 'r') as csv_file:
-        for row in csv.reader(csv_file):
-            instance, curr_species, spectrum = row[0], isolate_species(row[0]), [float(i) for i in row[1:]]
+    # Section 2A: the training routine itself, along with a dedicated reset method to avoid overwrites between subsequent trainings
+    def training(self, num_spectra=2, test_set_proportion=0.2, verbosity=False):
+        '''The neural net training function itself; this is where the fun happens'''
+        total_rounds = len(self.selections)
+        if self.trim_switch.value:  # if RIP trimming is enabled
+            total_rounds += len(self.selections)*self.num_slices
+        if self.cycle_fams.get():   # if familiar cycling is enabled
+            total_rounds *= 2
 
-            chem_data[instance] = spectrum
-            species.add(curr_species)
-            species_count[curr_species] += 1
-            families.add(get_family(instance))
-             
-            if not spectrum_size: # record size of first spectrum, throw an error if any subsequent spectra are not the same size
-                spectrum_size = len(spectrum)
-            elif len(spectrum) != spectrum_size:
-                raise ValueError('Spectra must all be of the same length')
-                    
-    species, families = sorted(species), sorted(families)  # sort and convert to lists
-
-    for family in families: # build a dict of onehot mapping vectors by family
-        family_mapping[family] = tuple(int(i == family) for i in families)
-
-    for instance, data in chem_data.items():  # add mapping vector to all data entries
-        vector = family_mapping[get_family(instance)]
-        chem_data[instance] = (data, vector)
+        # PRE-TRAINING PREPARATIONS TO ENSURE INTERFACE CONTINUITY
+        self.reset_training()  # ensure no previous training states are kept before beginning (applies to retrain option specifically)
+        self.train_button.configure(state='disabled') # disable training button while training (an idiot-proofing measure)
+        self.train_window = TrainingWindow(self.main, total_rounds, self.hyperparams['Number of Epochs'], self.training, self.reset, self.shutdown, self.train_button)
+        self.keras_callbacks.append(TkEpochs(self.train_window))
         
-    packaged_data = {   # package all the data into a single dict for json dumping
-        'chem_data' : chem_data,
-        'species' : species,
-        'families' : families,
-        'family_mapping' : family_mapping,
-        'spectrum_size' : spectrum_size,
-        'species_count' : species_count
-    }
-    with open(f'{source_file_name}.json', 'w') as json_file:
-        json.dump(packaged_data, json_file) # dump our data into a json file with the same name as the original datacsv
-
-def csvize(source_file_name):
-    '''Inverse of jsonize, takes a processed chemical data json file and reduces it to a csv with just the listed spectra'''
-    with open(f'{source_file_name}.json', 'r') as source_file, open(f'{source_file_name}.csv', 'w', newline='') as dest_file:
-        json_data = json.load(source_file)
-        for instance, data in json_data['chem_data'].items():
-            row = [instance, *data[0]] # include only the spectrum (not the vector) after the name in the row
-            csv.writer(dest_file).writerow(row)
-
+        # ACTUAL TRAINING CYCLE BEGINS
+        save_weights = self.save_weights.get() #  flag for whether or not to save model weights after each training loop
+        for familiar_cycling in range(1 + self.cycle_fams.get()):  # if cycling is enabled, run throught the training twice, toggling familiar status in between      
+            if familiar_cycling:
+                self.fam_switch.toggle()  # toggle the unfamiliar status the second time through (only occurs if cycling is enabled)
+                self.summaries.clear()
             
-# data transformation methods - note that these only work with jsons for simplicity, if you want a csv, then use csvize after the transformation
-def base_transform(file_name, operation=lambda x : x, discriminator=None, indicator='', prevent_overwrites=False, **opargs):
-    '''The base method for transforming data, takes target file (always a .json) and a function to operate on each spectrum in the file.
-    Optionally, a boolean-valued function over spectra can be passed as a discriminator to set criteria for removal of spectra in the transform'''
-    source_file_name, dest_file_name = f'{file_name}.json', f'{file_name}{indicator}.json'
-    if prevent_overwrites and Path(dest_file_name).exists():  # if overwrite prevention is enabled, throw an error instead of transforming
-        raise FileExistsError('Overwrite permission denied in function call')
-    
-    with open(source_file_name, 'r') as source_file, open(dest_file_name, 'w', newline='') as dest_file:
-        json_data = json.load(source_file)
-           
-        temp_dict = {} # temporary dictionary is used to allow for deletion of chemdata entries (can't delete while iterating, can't get length in dict comprehension)
-        for instance, (spectrum, vector) in json_data['chem_data'].items():
-            if not discriminator or not discriminator(instance, spectrum): # only perform the operation if no discriminator exists or if the discrimination criterion is unmet
-                temp_dict[instance] = (operation(spectrum, **opargs), vector) # if no operation is passed, spectra iwll remain unchanged
-        json_data['chem_data'] = temp_dict
-        json_data['spectrum_size'] = len(operation(spectrum, **opargs)) # takes the length to be that of the last spectrum in the set; all spectra are
-        # guaranteed to be the same size by the jsonize method, so under a uniform transform, any change in spectrum size should also be uniform throughout
+            # FILE MANAGEMENT FOR TRAIN SETTINGS RECORD AND RESULTS FOLDERS
+            start_time = time()    # log start of runtime, will re-log if cycling is enabled
+            fam_training = self.fam_switch.value    
+            familiar_str = f'{fam_training and "F" or "Unf"}amiliar'  # some str formatting based on whether the current training type is familiar or unfamiliar
+            self.train_window.set_familiar_status(familiar_str)
+            
+            self.train_window.set_status('Creating Folders...') 
+            results_folder = Path('Saved Training Results', f'{self.data_file.stem} Results', f'{self.hyperparams["Number of Epochs"]}-epoch {familiar_str}')
+            if results_folder.exists():   # prompt user to overwrite file if one already exists
+                if messagebox.askyesno('Duplicates Found', 'Folder with same data settings found;\nOverwrite old folder?'): 
+                    rmtree(results_folder, ignore_errors=True)
+                else:
+                    self.reset_training()
+                    return  #terminate prematurely if overwrite permission is not given
+            results_folder.mkdir(parents=True)
+
+            with open(results_folder/'Training Settings.txt', 'a') as settings_file:  # make these variables more compact at some point
+                settings_file.write(f'Source File : {self.data_file.name}\n\n')
+                settings_file.write(f'Familiar Training : {fam_training}\n')
+                for hyperparam, value in self.hyperparams.items():
+                    settings_file.write(f'{hyperparam} : {value}\n')
+            
+            # INNER LAYERS OF TRAINING LOOP
+            for member in self.selections: # iterate over all species selected for evaluation
+                for segment in range(1 + int(self.trim_switch.value)*self.num_slices): # by default only train once with the full spectrum. If trimming is enabled...
+                # INITIALIZATION OF SOME INFORMATION REGARDING THE CURRENT ROUND       ## ...then train an extra <number of slices> times
+                    self.train_window.set_status('Training...')
+                    curr_family = iumsutils.get_family(member)
+                    self.train_window.round_progress.increment() # increment round progress
+
+                    if segment == 0:  # first segment will always be over the full spectrum, regardless of trimming
+                        lower_bound, upper_bound =  0, self.spectrum_size
+                        point_range = 'Full Spectra'
+                    else:
+                        lower_bound, upper_bound = self.trimming_min, self.trimming_max - self.slice_decrement*(segment - 1) # trimming segments start at segment == 1, hence the -1
+                        point_range = f'Points {lower_bound}-{upper_bound}'
+                    self.train_window.set_slice(point_range)                 
+
+                # EVALUATION AND TRAINING SET SELECTION AND SPLITTING 
+                    plot_list = []
+                    eval_data, eval_titles = [], [] # the first plot, after results are produced, will be the summation plot
+                    features, labels, occurrences = [], [], Counter()
+                    train_set_size, eval_set_size = 0, 0
+
+                    for instance, (data, vector) in self.chem_data.items():
+                        data = data[lower_bound:upper_bound]                      
+                        if iumsutils.isolate_species(instance) == member:  # add all instances of the current species to the evaluation set
+                            eval_set_size += 1
+                            eval_data.append(data)
+                            eval_titles.append(instance)
+
+                            if eval_set_size <= num_spectra:  # add the specified number of sample spectra to the list of plots
+                                plot_list.append( ((range(lower_bound, upper_bound), data), instance, 's'))
+
+                        if iumsutils.isolate_species(instance) != member or fam_training:  # add any instance to the training set, unless its a member
+                            train_set_size += 1                                            # of the current species and unfamiliar training is enabled
+                            features.append(data)
+                            labels.append(vector)
+                            occurrences[iumsutils.get_family(instance)] += 1
+
+                    self.train_window.set_member(f'{member} ({eval_set_size} instances found)')                      
+                    x_train, x_test, y_train, y_test = map(np.array, train_test_split(features, labels, test_size=test_set_proportion)) # keras model only accepts numpy arrays
+
+                    if verbosity:   # optional printout to console, gives overview of the training data and the model settings
+                        for (x, y, group) in ((x_train, y_train, "training"), (x_test, y_test, "test")):
+                            print(f'{x.shape[0]} features & {y.shape[0]} labels in {group} set ({round(100*x.shape[0]/train_set_size, 2)}% of the data)')
+                        print(f'\n{len(self.chem_data)} features total. Of the {train_set_size} instances in training dataset:')
+                        for family in self.family_mapping.keys():
+                            print(f'\t{round(100*occurrences[family]/train_set_size, 2)}% of data are {family}')
+
+                # MODEL CREATION AND TRAINING
+                    with tf.device('CPU:0'):     # eschews the requirement for a brand-new NVIDIA graphics card (which we don't have anyways)                      
+                        model = Sequential()     # model block is created, layers are added to this block
+                        model.add(Dense(512, input_dim=(upper_bound - lower_bound), activation='relu'))  # 512 neuron input layer, size depends on trimming
+                        model.add(Dropout(0.5))                                    # dropout layer, to reduce overfit
+                        model.add(Dense(512, activation='relu'))                   # 512 neuron hidden layer
+                        model.add(Dense(len(self.families), activation='softmax')) # softmax gives probability distribution of identity over all families
+                        model.compile(loss='categorical_crossentropy', optimizer=Adam(lr=self.hyperparams['Learn Rate']), metrics=['accuracy']) 
+                    if verbosity:
+                        model.summary()
+
+                    # model training occurs here
+                    hist = model.fit(x_train, y_train, callbacks=self.keras_callbacks, verbose=verbosity and 2 or 0, 
+                                     epochs=self.hyperparams['Number of Epochs'], batch_size=self.hyperparams['Batch Size'])
+                    test_loss, test_acc = model.evaluate(x_test, y_test, verbose=(verbosity and 2 or 0))  # keras' self evaluation of loss and accuracy metrics
+
+                    if self.train_window.end_training:  # condition to escape training loop if training is aborted
+                        messagebox.showerror('Training has Stopped!', 'Training aborted by user;\nProceed from Progress Window')
+                        self.train_window.button_frame.enable()
+                        return     # without this, aborting training only pauses one iteration of loop
+
+                    if save_weights: # if training has not been aborted and saving is enabled, save the model to the current result directory
+                        self.train_window.set_status('Saving Model...')
+                        model.save(str(results_folder/point_range/f'{member} Model Files')) # path can only be str, for some reason
+
+                # PREDICTION OVER EVALUATION SET, EVALUATION OF PERFORMANCE                 
+                    targets, num_correct = [], 0    # produce prediction values using the model and determine the accuracy of these predictions
+                    predictions = [list(prediction) for prediction in model.predict(np.array(eval_data))]
+
+                    for prediction in predictions:
+                        target_index = self.family_mapping[curr_family].index(1)
+                        target = prediction[target_index]
+                        targets.append(target)
+
+                        if max(prediction) == target:
+                            num_correct += 1
+
+                    targets.sort(reverse=True)
+                    fermi_data = iumsutils.normalized(targets)
+
+
+                # PACKAGING OF ALL PLOTS, APART FROM THE EVALUATION SPECTRA
+                    loss_plot     = (hist.history['loss'], 'Training Loss (Final = %0.2f)' % test_loss, 'm') 
+                    accuracy_plot = (hist.history['accuracy'], 'Training Accuracy (Final = %0.2f%%)' % (100 * test_acc), 'm') 
+                    fermi_plot    = (fermi_data, f'{member}, {num_correct}/{eval_set_size} correct', 'f')  
+
+                    predictions.insert(0, [iumsutils.average(column) for column in zip(*predictions)]) # prepend standardized sum of predictions to predictions
+                    eval_titles.insert(0, 'Standardized Summation') # prepend label to the above list to the titles list
+                    prediction_plots = [((self.family_mapping.keys(), prediction), eval_titles[i], 'p') for i, prediction in enumerate(predictions)]  
+
+                    for plot in (loss_plot, accuracy_plot, fermi_plot, *prediction_plots): # collate together the plot data tuples (will implement as objects)
+                        plot_list.append(plot)    
+
+                # ORGANIZATION AND ADDITION OF RELEVANT DATA TO THE SUMMARY DICT
+                    if point_range not in self.summaries:    # adding relevant data to the summary dict                                 
+                        self.summaries[point_range] = ( [], {} )
+                    fermi_data, score_data = self.summaries[point_range]
+
+                    fermi_data.append(fermi_plot)
+
+                    if curr_family not in score_data:
+                        score_data[curr_family] = ( [], [] )
+                    names, scores = score_data[curr_family]
+                    names.append(member)
+                    scores.append(round(num_correct/eval_set_size, 4))
+
+                # CREATION OF FOLDERS, IF NECESSARY, AND PLOTS FOR THE CURRENT ROUND
+                    self.train_window.set_status('Writing Results to Folders...')    # creating folders as necessary, writing results to folders 
+                    point_folder = results_folder/point_range # folder containing results for the current spectrum slice 
+                    if not point_folder.exists():                                                           
+                        point_folder.mkdir(parents=True)
+                    iumsutils.adagraph(plot_list, 6, save_dir=results_folder/point_range/member)
         
-        if discriminator:  # only necessary to recount families, species, and instances if spectra are being removed
-            all_instances = json_data['chem_data'].keys()
-            json_data['families'] = sorted( set(get_family(instance) for instance in all_instances) )
-            json_data['species'] = sorted( set(isolate_species(instance) for instance in all_instances) )
-            json_data['species_count'] = Counter(isolate_species(instance) for instance in all_instances)
+            # DISTRIBUTION OF SUMMARY DATA TO APPROPRIATE RESPECTIVE FOLDERS
+            self.train_window.set_status('Distributing Result Summaries...')  
+            for point_range, (fermi_data, score_data) in self.summaries.items(): 
+                iumsutils.adagraph(fermi_data, 5, save_dir=results_folder/point_range/'Fermi Summary.png')
 
-        json.dump(json_data, dest_file) # dump the result in the new file
+                with open(results_folder/point_range/'Scores.txt', 'a') as score_file:
+                    for family, (names, scores) in score_data.items():
+                        family_header = f'{"-"*20}\n{family}\n{"-"*20}\n'  # an underlined heading for each family
+                        score_file.write(family_header)   
 
+                        processed_scores = sorted(zip(names, scores), key=lambda x : x[1], reverse=True) # zip scores together and sort in ascending order by score
+                        processed_scores.append( ('AVERAGE', iumsutils.average(scores, precision=4)) )   # add the average score to the score list for each family
 
-def fft_with_smoothing(spectrum, harmonic_cutoff=None, smooth_only=False):                                                      
-    '''Performs a fast Fourier Transform over a spectrum; can optionally cut off higher frequencies, as well as
-    converting the truncated frequency space into a (now noise-reduced) spectrum using the inverse transform'''
-    fft_spectrum = np.fft.hfft(spectrum)  # perform a Hermitian (real-valued) fast Fourier transform over the data
-    if harmonic_cutoff:
-        blanks = np.zeros(np.size(fft_spectrum)-harmonic_cutoff) # make everything beyond the harmonic cut-off point zeros
-        fft_spectrum = np.concatenate( (fft_spectrum[:harmonic_cutoff], blanks) )
-    if smooth_only:
-        fft_spectrum = np.fft.ihfft(fft_spectrum).real # keep only real part of inverse transform (imag part is 0 everywhere, but is kept complex type for some reason)
-    return list(fft_spectrum)
-    
-def fourierize(file_name, harmonic_cutoff=None, smooth_only=False):  
-    '''Creates a copy of a PLATIN-UMS-compatible data file, with all spectra being replaced by their Discrete Fourier Transforms'''
-    base_transform(file_name, operation=fft_with_smoothing, indicator=f'(FT{smooth_only and "S" or ""})', harmonic_cutoff=harmonic_cutoff, smooth_only=smooth_only)
-
-    
-def sav_golay_smoothing(spectrum, window_length=5, polyorder=1):
-    '''Wrapper to convert SG-smoothed ndarray into lists for packaging into jsons'''
-    return list(savgol_filter(spectrum, window_length=window_length, polyorder=polyorder))
-    
-def filterize(file_name, cutoff=0.5):  # this method is very much WIP, quality of normalization cannot be spoken for at the time of writing
-    '''Duplicate a dataset, omitting all spectra whose maximum falls below the specified cutoff value and applying Savitzky-Golay Filtering'''
-    base_transform(file_name, operation=sav_golay_smoothing, discriminator=lambda instance, spectrum : max(spectrum) < cutoff, indicator='(S)')
-
-    
-def get_RIP_cutoffs(file_name, lower_limit=0.15, upper_limit=0.95): 
-    '''Helper method for filtering Mode 1 data specifically. Takes a json file and normalized lower and upper limits (from 0 to 1)
-    and returns a dict (by species) of the lower and upper RIP cutoff values corresponding to these limits'''
-    if 'Mode 1' not in file_name: # ensure this is not applied to data for which it is not compatible
-        raise TypeError('File is not a Mode 1 dataset')
+                        for name, score in processed_scores:
+                            score_file.write(f'{name} : {score}\n')
+                        score_file.write('\n')   # leave a gap between each family
+            
+            with open(results_folder/'Training Settings.txt', 'a') as settings_file:  # log the training time in the Train Settings file
+                runtime = timedelta(seconds=round(time() - start_time))
+                settings_file.write(f'\nTraining Time : {runtime}')   
         
-    if lower_limit > 1 or upper_limit > 1 or lower_limit > upper_limit: # ensure limits passed actually make sense
-        raise ValueError('Limit(s) exceed 1 or are mismatched')
+        # POST-TRAINING WRAPPING-UP
+        self.train_window.button_frame.enable()  # open up post-training options in the training window
+        self.train_window.abort_button.configure(state='disabled') # disable the abort button (idiotproofing against its use after training)
+        self.train_window.set_status('Finished')
+        messagebox.showinfo('Training Completed Succesfully!', f'Training results can be found in folder:\n{results_folder.parents[0]}',
+                            parent=self.train_window.training_window)  # ensure the message originates from the training window's root
     
-    with open(f'{file_name}.json', 'r') as file:
-        json_data = json.load(file)
+    def reset_training(self):
+        '''Dedicated reset method for the training cycle, necessary to allow for cycling and retraining'''
+        if self.train_window: # if a window already exists
+            self.train_window.destroy()
+            self.train_window = None
+        self.summaries.clear()
+        self.keras_callbacks.clear()
+        
 
-    RIP_ranges = {}
-    for instance, (spectrum, vector) in json_data['chem_data'].items():
-        species = isolate_species(instance)
-        if species not in RIP_ranges: # ensure an entry exists for this species
-            RIP_ranges[species] = []
-
-        RIP_val = max(spectrum[:len(spectrum)//2]) # largest value in the first half of the spectrum is taken to be the RIP
-        RIP_ranges[species].append(RIP_val)
-
-    for species, RIP_list in RIP_ranges.items():
-        RIP_list.sort() # sort the list to be monotonic
-        lower_cutoff, *middle, upper_cutoff = [val for i, val in enumerate(RIP_list) if lower_limit < normalized(RIP_list)[i] < upper_limit] 
-        RIP_ranges[species] = (lower_cutoff, upper_cutoff) # list comprehension determines bounds based on the prescribed limits within a normalized RIP set
-    
-    return RIP_ranges  
-
-def filterize_mode1(file_name, lower_limit=0.15, upper_limit=0.95):
-    '''Filtering regime specific to Mode 1, will not work with other Modes, and Mode 1 sets should not be used with other filtering regimes.
-    Culls all spectra whose RIP lies outside of some prescribed normalized bounds for the RIP for that particular species'''
-    RIP_cutoffs = get_RIP_cutoffs(file_name, lower_limit=lower_limit, upper_limit=upper_limit)
-    
-    def discriminator(instance, spectrum):
-        '''Discriminator function for this regime, necessary to define this as a function-in-a-function, as the parameters
-        will change depending on the limits passed, opted for def rather than lambda for readability'''
-        lower_cutoff, upper_cutoff = RIP_cutoffs[isolate_species(instance)] # find the correct cutoffs by species for the current instance
-        return not (lower_cutoff < max(spectrum[:len(spectrum)//2]) < upper_cutoff) # flag if RIP is not within these cutoffs
-    
-    base_transform(file_name, discriminator=discriminator, indicator='(S1)')
-    
-
-
-def analyze_noise(file_name, ncols=4):  # consider making min/avg/max calculations in-place, rather than after reading
-    '''Generate a set of plots for all species in a dataset which shows how the baseline noise varies across spectra at each sample point'''
-    with open(f'{file_name}.json', 'r') as source_file:
-        json_data, data_by_species = json.load(source_file), {}
-        for instance, (spectrum, vector) in json_data['chem_data'].items():
-            species = isolate_species(instance)
-            if species not in data_by_species:  # ensure entries exists to avoid KeyError
-                data_by_species[species] = []
-            data_by_species[species].append(spectrum)
-    
-    noise_plots = []
-    for species, spectra in data_by_species.items():
-        noise_stats = [tuple(map(funct, zip(*spectra))) for funct in (min, average, max)] # tuple containing the min, avg, and max values across all points in all current species' spectra
-        plot_title = f'S.V. of {species}, ({len(spectra)} instances)'
-        noise_plots.append((noise_stats, plot_title, 'v'))  # bundled plot for the current species
-    adagraph(noise_plots, ncols, f'./Dataset Noise Plots/Spectral Variation by Species, {file_name}')
-    
-def analyze_fourier_smoothing(file_name, instance, cutoff, nrows=1, ncols=4, display_size=20, save_plot=False):
-    '''Investigate the original spectrum, Fourier Spectrum, truncated Fourier Spectrum, and reconstructed truncated spectrum of a
-    single instance in the specified dataset. Optionally, can save the figure to the current directory, if it is of interest'''
-    with open(f'{file_name}.json', 'r') as json_file:
-        json_data = json.load(json_file)
-    
-    fig, axs = plt.subplots(nrows, ncols, figsize=(display_size, display_size * nrows/ncols))
-    
-    orig_data = json_data['chem_data'][instance][0]
-    axs[0].plot(orig_data, 'c-')
-    axs[0].set_title('Original Spectrum')
-    
-    fft_data = np.fft.hfft(orig_data)
-    axs[1].plot(fft_data, 'm-')
-    axs[1].set_title('FFT Spectrum')
-    
-    cut_fft_data = np.concatenate( (fft_data[:cutoff], np.zeros(np.size(fft_data)-cutoff)) )
-    axs[2].plot(cut_fft_data, 'm-')
-    axs[2].set_title(f'FFT Spectrum (to point {cutoff})')
-    
-    rec_data = np.fft.ihfft(cut_fft_data).real
-    axs[3].plot(rec_data, 'c-')
-    axs[3].set_title(f'Reconstructed Spectrum (to point {cutoff})')
-    
-    plt.suptitle(instance)
-    if save_plot:
-        plt.savefig(f'Fourier Smoothing of {instance} (to point {cutoff})')
-    else:
-        plt.show()
-    plt.close('all')
-    
-def analyze_fsmoothing_range(file_name, instance, step_size, ncols=7):
-    '''Investigate the Fourier-smoothed spectra for a given instance over a range of harmonic cutoff points'''
-    if 'FT' in file_name:
-        raise TypeError('Method only applies to non-Fourier Transformed data')
-    
-    plot_list = []
-    with open(f'{file_name}.json', 'r') as json_file:
-        json_data = json.load(json_file)
-    
-    x_range = range(json_data['spectrum_size'])
-    orig_data = json_data['chem_data'][instance][0]
-    plot_list.append( ((x_range, orig_data), f'Original Spectrum ({instance})', 's') )
-    
-    fft_data = np.fft.hfft(orig_data)
-    for cutoff in range(step_size, fft_data.size, step_size):
-        cut_fft_data = np.concatenate( (fft_data[:cutoff], np.zeros(np.size(fft_data)-cutoff)) ) 
-        rec_data = tuple(np.fft.ihfft(cut_fft_data).real)
-        plot_list.append( ((x_range, rec_data), f'Reconstructed Spectrum  (to freq. {cutoff})', 's') )
-    plot_list.append( ((x_range, np.fft.ihfft(fft_data).real), 'Fully Reconstructed Spectrum', 's') )
-    
-    adagraph(plot_list, ncols, f'Incremented FTSmoothing of {instance}')
+if __name__ == '__main__':        
+    main_window = tk.Tk()
+    app = PLATINUMS_App(main_window)
+    main_window.mainloop()
