@@ -5,9 +5,8 @@ import TimTkLib as ttl     # library of custom tkinter widgets I've written to m
 # Built-in Imports
 import json
 from time import time                      
-from datetime import timedelta
 from pathlib import Path
-from shutil import rmtree
+from shutil import rmtree, copyfile
 from collections import Counter
 import tkinter as tk    # Built-In GUI imports
 from tkinter import messagebox
@@ -22,6 +21,7 @@ from tensorflow.keras.optimizers import Adam
 from tensorflow.keras.models import Sequential, load_model
 from tensorflow.keras.layers import Dense, Dropout
 from tensorflow.keras.callbacks import EarlyStopping, Callback
+tf.get_logger().setLevel('ERROR') # suppress deprecation warnings which riddle all version of tensorflow
 
 
 # SECTION 1 : custom classes needed to operate some features of the main GUI  ---------------------------------------------------                   
@@ -397,8 +397,8 @@ class PLATINUMS_App:
             
             # INNER LAYERS OF TRAINING LOOP
             for member in self.selections: # iterate over all species selected for evaluation
-                for segment in range(1 + int(self.trim_switch.value)*self.num_slices): # by default only train once with the full spectrum. If trimming is enabled...
-                # INITIALIZATION OF SOME INFORMATION REGARDING THE CURRENT ROUND       ## ...then train an extra <number of slices> times
+                for segment in range(1 + (self.trim_switch.value and self.num_slices or 0)): # by default only train once with the full spectrum. If trimming is enabled...
+                # INITIALIZATION OF SOME INFORMATION REGARDING THE CURRENT ROUND             ## ...then train an extra <number of slices> times (DON"T DO ARITHMETICALLY!)
                     self.train_window.set_status('Training...')
                     curr_family = iumsutils.get_family(member)
                     self.train_window.round_progress.increment() # increment round progress
@@ -534,8 +534,7 @@ class PLATINUMS_App:
                         score_file.write('\n')   # leave a gap between each family
             
             with open(results_folder/'Training Settings.txt', 'a') as settings_file:  # log the training time in the Train Settings file
-                runtime = timedelta(seconds=round(time() - start_time))
-                settings_file.write(f'\nTraining Time : {runtime}')   
+                settings_file.write(f'\nTraining Time : {iumsutils.format_time(time() - start_time)}')   
         
         # POST-TRAINING WRAPPING-UP
         self.train_window.button_frame.enable()  # open up post-training options in the training window
