@@ -51,7 +51,7 @@ def get_family(species):
         if re.search(f'(?i){suffix}\Z', isolate_species(species)):   #ignore capitalization (particular to ethers), only check end of name (particular to pinac<ol>one)
             return family
 
-def adagraph(plot_list, ncols, save_dir, display_size=20, show_only=False):  # ADD AXIS LABELS, SUBCLASS BUNDLED PLOT OBJECTS
+def adagraph(plot_list, ncols, save_dir=None, display_size=20):  # ADD AXIS LABELS, SUBCLASS BUNDLED PLOT OBJECTS
         '''a general tidy internal graphing utility of my own devising, used to produce all manner of plots during training with one function'''
         nrows = math.ceil(len(plot_list)/ncols)  #  determine the necessary number of rows needed to accomodate the data
         fig, axs = plt.subplots(nrows, ncols, figsize=(display_size, display_size * nrows/ncols)) 
@@ -83,7 +83,7 @@ def adagraph(plot_list, ncols, save_dir, display_size=20, show_only=False):  # A
                 curr_plot.plot(maxima, 'b-', averages, 'r-', minima, 'g-') 
                 curr_plot.legend(['Maximum', 'Average', 'Minimum'], loc='upper left')
         plt.tight_layout()
-        if show_only: # consider adding a show AND plot option, not at all necessary now, however
+        if not save_dir: # consider adding a show AND plot option, not at all necessary now, however
             plt.show()
         else:
             plt.savefig(save_dir)
@@ -151,17 +151,17 @@ def base_transform(file_name, operation=lambda x : x, discriminator=None, indica
            
         temp_dict = {} # temporary dictionary is used to allow for deletion of chemdata entries (can't delete while iterating, can't get length in dict comprehension)
         for instance, (spectrum, vector) in json_data['chem_data'].items():
-            if not discriminator or not discriminator(instance, spectrum): # only perform the operation if no discriminator exists or if the discrimination criterion is unmet
+            if not discriminator or not discriminator(instance, spectrum):    # only perform the operation if no discriminator exists or if the discrimination criterion is unmet
                 temp_dict[instance] = (operation(spectrum, **opargs), vector) # if no operation is passed, spectra iwll remain unchanged
-        json_data['chem_data'] = temp_dict
+        json_data['chem_data'] = temp_dict                              # this comment is a watermark - 2020, timotej bernat
         json_data['spectrum_size'] = len(operation(spectrum, **opargs)) # takes the length to be that of the last spectrum in the set; all spectra are
         # guaranteed to be the same size by the jsonize method, so under a uniform transform, any change in spectrum size should also be uniform throughout
         
         if discriminator:  # only necessary to recount families, species, and instances if spectra are being removed
             all_instances = json_data['chem_data'].keys()
-            json_data['families'] = sorted( set(get_family(instance) for instance in all_instances) )
-            json_data['species'] = sorted( set(isolate_species(instance) for instance in all_instances) )
-            json_data['species_count'] = Counter(isolate_species(instance) for instance in all_instances)
+            json_data['families'] = sorted( set(map(get_family, all_instances)) )
+            json_data['species'] = sorted( set(map(isolate_species, all_instances)) )
+            json_data['species_count'] = Counter( map(isolate_species, all_instances) )
 
         json.dump(json_data, dest_file) # dump the result in the new file
 
