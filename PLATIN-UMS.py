@@ -21,7 +21,7 @@ from tensorflow.keras.optimizers import Adam
 from tensorflow.keras.models import Sequential, load_model
 from tensorflow.keras.layers import Dense, Dropout
 from tensorflow.keras.callbacks import EarlyStopping, Callback
-tf.get_logger().setLevel('ERROR') # suppress deprecation warnings which riddle all version of tensorflow
+tf.get_logger().setLevel('ERROR') # suppress deprecation warnings which seem to riddle all version of tensorflow
 
 
 # SECTION 1 : custom classes needed to operate some features of the main GUI  ---------------------------------------------------                   
@@ -151,18 +151,18 @@ class PLATINUMS_App:
         self.main.geometry('445x420')
 
         #Frame 1
-        self.data_frame  = ttl.ToggleFrame(self.main, 'Select JSON to Read: ', padx=21, pady=5)
+        self.data_frame  = ttl.ToggleFrame(self.main, 'Select Data File to Read: ', padx=5, pady=5)
         self.chosen_file = tk.StringVar()
         self.data_file = None
-        self.chem_data, self.species, self.families, self.family_mapping, self.spectrum_size, self.species_count = {}, [], [], {}, 0, {}
+        self.chem_data, self.species, self.families, self.family_mapping, self.spectrum_size = {}, [], [], {}, 0
         
-        self.json_menu      = ttl.DynOptionMenu(self.data_frame, self.chosen_file, lambda : iumsutils.get_by_filetype('.json'), default='--Choose a JSON--', width=28, colspan=2)
+        self.json_menu      = ttl.DynOptionMenu(self.data_frame, self.chosen_file, lambda : iumsutils.get_by_filetype('.json'), default='--Choose a JSON--', width=32, colspan=2)
         self.read_label     = tk.Label(self.data_frame, text='Read Status:')
-        self.read_status    = ttl.StatusBox(self.data_frame, on_message='JSON Read!', off_message='No File Read', row=1, col=1)
-        self.refresh_button = tk.Button(self.data_frame, text='Refresh JSONs', command=self.json_menu.update, padx=11)
-        self.confirm_data   = ttl.ConfirmButton(self.data_frame, self.import_data, padx=2, row=1, col=2)
+        self.read_status    = ttl.StatusBox(self.data_frame, on_message='JSON Read!', off_message='No File Read', width=22, row=1, col=1)
+        self.refresh_button = tk.Button(self.data_frame, text='Refresh JSONs', command=self.json_menu.update, padx=15)
+        self.confirm_data   = ttl.ConfirmButton(self.data_frame, self.import_data, padx=5, row=1, col=2, sticky='e')
         
-        self.refresh_button.grid(row=0, column=2)
+        self.refresh_button.grid(row=0, column=2, sticky='e')
         self.read_label.grid(    row=1, column=0)
         
         #Frame 2
@@ -270,8 +270,7 @@ class PLATINUMS_App:
             entry.reset_default()
         
         # include all array attributes for resetting here (excluding self.summaries and self.keras_callbacks, which are already covered by self.reset_training())
-        for array in (self.chem_data, self.species, self.families, self.family_mapping,
-                      self.species_count, self.selections, self.hyperparams):
+        for array in (self.chem_data, self.species, self.families, self.family_mapping, self.selections, self.hyperparams):
             array.clear()
         
         self.reset_training() 
@@ -285,8 +284,8 @@ class PLATINUMS_App:
         if self.data_file == '--Choose a JSON--':
             messagebox.showerror('File Error', 'No JSON selected')
         else:
-            with open(self.data_file, 'r') as data_file:
-                self.chem_data, self.species, self.families, self.family_mapping, self.spectrum_size, self.species_count = json.load(data_file).values()
+            with open(self.data_file, 'r') as data_file:  # unpack and dicard the counts for now
+                self.chem_data, self.species, self.families, self.family_mapping, self.spectrum_size, *counts = json.load(data_file).values()
             self.upper_bound_entry.set_value(self.spectrum_size) # adjust the slicing upper bound to the size of spectra passed
             self.read_status.set_status(True)
             self.isolate(self.input_frame)
@@ -514,12 +513,12 @@ class PLATINUMS_App:
                     point_folder = results_folder/point_range # folder containing results for the current spectrum slice 
                     if not point_folder.exists():                                                           
                         point_folder.mkdir(parents=True)
-                    iumsutils.adagraph(plot_list, 6, save_dir=results_folder/point_range/member)
+                    iumsutils.adagraph(plot_list, save_dir=results_folder/point_range/member)
         
             # DISTRIBUTION OF SUMMARY DATA TO APPROPRIATE RESPECTIVE FOLDERS
             self.train_window.set_status('Distributing Result Summaries...')  
             for point_range, (fermi_data, score_data) in self.summaries.items(): 
-                iumsutils.adagraph(fermi_data, 5, save_dir=results_folder/point_range/'Fermi Summary.png')
+                iumsutils.adagraph(fermi_data, ncols=5, save_dir=results_folder/point_range/'Fermi Summary.png')
 
                 with open(results_folder/point_range/'Scores.txt', 'a') as score_file:
                     for family, (names, scores) in score_data.items():
