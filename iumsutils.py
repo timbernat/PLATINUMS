@@ -7,6 +7,13 @@ import numpy as np
 from scipy.signal import savgol_filter
 
 # general-use methods to ease may common tasks
+def format_time(sec):
+    '''Converts a duration in seconds into an h:mm:ss string.
+    written explicitly to avoid importing datetime.timedelta'''
+    minutes, seconds = divmod(round(sec), 60)
+    hours, minutes = divmod(minutes, 60)
+    return f'{hours:d}:{minutes:02d}:{seconds:02d}'
+
 def average(iterable, precision=None):
     '''Calculate and return average of an iterable'''
     avg = sum(iterable)/len(iterable)
@@ -51,7 +58,7 @@ def get_family(species):
         if re.search(f'(?i){suffix}\Z', isolate_species(species)):   #ignore capitalization (particular to ethers), only check end of name (particular to pinac<ol>one)
             return family
 
-def adagraph(plot_list, ncols, save_dir=None, display_size=20):  # ADD AXIS LABELS, SUBCLASS BUNDLED PLOT OBJECTS
+def adagraph(plot_list, ncols=6, save_dir=None, display_size=20):  # ADD AXIS LABELS, SUBCLASS BUNDLED PLOT OBJECTS
         '''a general tidy internal graphing utility of my own devising, used to produce all manner of plots during training with one function'''
         nrows = math.ceil(len(plot_list)/ncols)  #  determine the necessary number of rows needed to accomodate the data
         fig, axs = plt.subplots(nrows, ncols, figsize=(display_size, display_size * nrows/ncols)) 
@@ -91,7 +98,7 @@ def adagraph(plot_list, ncols, save_dir=None, display_size=20):  # ADD AXIS LABE
         
         
 # file conversion methods - csv to json and vice versa-------------------------------------------------------------------------------------------------
-def jsonize(source_file_name): 
+def jsonize(source_file_name): # add families count as well
     '''Process spectral data csvs, generating labels, vector mappings, species counts, and other information,
     then cast the data to a json for ease of data reading in other applications and methods'''
     chem_data, species, families, family_mapping, spectrum_size, species_count = ({}, set(), set(), {}, 0, Counter())
@@ -233,6 +240,19 @@ def filterize_mode1(file_name, lower_limit=0.15, upper_limit=0.95):
     base_transform(file_name, discriminator=discriminator, indicator='(S1)')
     
 
+# analysis and data characterization methods
+def inspect_spectra(file_name, species, ncols=6, save_dir=None):
+    '''Plot the spectra of all instances of one species in the chosen dataset'''
+    with open(f'{file_name}.json') as json_file:
+        json_data = json.load(json_file)
+
+    if species not in json_data['species']:
+        raise ValueError(f'Species "{species}" not in dataset')
+        
+    plot_list = [ ((range(len(spectrum)), spectrum), instance, 's') 
+                  for instance, (spectrum, vector) in json_data['chem_data'].items()
+                  if isolate_species(instance) == species]
+    adagraph(plot_list, ncols=ncols, save_dir=save_dir)
 
 def analyze_noise(file_name, ncols=4):  # consider making min/avg/max calculations in-place, rather than after reading
     '''Generate a set of plots for all species in a dataset which shows how the baseline noise varies across spectra at each sample point'''
