@@ -101,15 +101,17 @@ def adagraph(plot_list, ncols=6, save_dir=None, display_size=20):  # ADD AXIS LA
 def jsonize(source_file_name): # add families count as well
     '''Process spectral data csvs, generating labels, vector mappings, species counts, and other information,
     then cast the data to a json for ease of data reading in other applications and methods'''
-    chem_data, species, families, family_mapping, spectrum_size, species_count = ({}, set(), set(), {}, 0, Counter())
+    chem_data, species, families, family_mapping, spectrum_size, species_count, family_count = ({}, set(), set(), {}, 0, Counter(), Counter())
     with open(f'{source_file_name}.csv', 'r') as csv_file:
         for row in csv.reader(csv_file):
-            instance, curr_species, spectrum = row[0], isolate_species(row[0]), [float(i) for i in row[1:]]
-
+            instance, spectrum = row[0], [float(i) for i in row[1:]]
             chem_data[instance] = spectrum
-            species.add(curr_species)
-            species_count[curr_species] += 1
+            
+            species.add(isolate_species(instance))
+            species_count[isolate_species(instance)] += 1
+            
             families.add(get_family(instance))
+            family_count[get_family(instance)] += 1
              
             if not spectrum_size: # record size of first spectrum, throw an error if any subsequent spectra are not the same size
                 spectrum_size = len(spectrum)
@@ -117,10 +119,8 @@ def jsonize(source_file_name): # add families count as well
                 raise ValueError('Spectra must all be of the same length')
                     
     species, families = sorted(species), sorted(families)  # sort and convert to lists
-
-    for family in families: # build a dict of onehot mapping vectors by family
-        family_mapping[family] = tuple(int(i == family) for i in families)
-
+    
+    family_mapping = {family : tuple(int(i == family) for i in families) for family in families} # build a dict of onehot mapping vectors by family
     for instance, data in chem_data.items():  # add mapping vector to all data entries
         vector = family_mapping[get_family(instance)]
         chem_data[instance] = (data, vector)
@@ -131,7 +131,8 @@ def jsonize(source_file_name): # add families count as well
         'families' : families,
         'family_mapping' : family_mapping,
         'spectrum_size' : spectrum_size,
-        'species_count' : species_count
+        'species_count' : species_count,
+        'family_count' : family_count
     }
     with open(f'{source_file_name}.json', 'w') as json_file:
         json.dump(packaged_data, json_file) # dump our data into a json file with the same name as the original datacsv
@@ -167,6 +168,8 @@ def base_transform(file_name, operation=lambda x : x, discriminator=None, indica
         if discriminator:  # only necessary to recount families, species, and instances if spectra are being removed
             all_instances = json_data['chem_data'].keys()
             json_data['families'] = sorted( set(map(get_family, all_instances)) )
+            json_data['family_count'] = Counter( map(get_family, all_instances) )
+            
             json_data['species'] = sorted( set(map(isolate_species, all_instances)) )
             json_data['species_count'] = Counter( map(isolate_species, all_instances) )
 
