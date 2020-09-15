@@ -6,7 +6,6 @@ import TimTkLib as ttl     # library of custom tkinter widgets I've written to m
 import json, shutil
 from time import time                      
 from pathlib import Path
-from collections import Counter
 import tkinter as tk    # Built-In GUI imports
 from tkinter import messagebox
 
@@ -180,31 +179,31 @@ class PLATINUMS_App:
         self.hyperparams = {}
         
         self.hyperparam_frame    = ttl.ToggleFrame(self.main, 'Set Hyperparameters: ', padx=8, pady=5, row=2)
-        self.epoch_entry         = ttl.LabelledEntry(self.hyperparam_frame, 'Epochs:', tk.IntVar(), width=19, default=2048)
-        self.batchsize_entry     = ttl.LabelledEntry(self.hyperparam_frame, 'Batchsize:', tk.IntVar(), width=19, default=32, row=1)
+        self.epoch_entry         = ttl.LabelledEntry(self.hyperparam_frame, 'Epochs:', tk.IntVar(),       width=19, default=2048)
+        self.batchsize_entry     = ttl.LabelledEntry(self.hyperparam_frame, 'Batchsize:', tk.IntVar(),    width=19, default=32, row=1)
         self.learnrate_entry     = ttl.LabelledEntry(self.hyperparam_frame, 'Learnrate:', tk.DoubleVar(), width=18, default=2e-5, col=3)
         self.confirm_hyperparams = ttl.ConfirmButton(self.hyperparam_frame, self.confirm_hp, row=1, col=3, cs=2, sticky='e')
         self.hyperparam_frame.disable()
         
         #Frame 4
-        self.trimming_min = None
-        self.trimming_max = None
+        self.trimming_min =    None
+        self.trimming_max =    None
         self.slice_decrement = None
-        self.num_slices = None
+        self.num_slices =      None
         self.keras_callbacks = []
         
         self.param_frame = ttl.ToggleFrame(self.main, 'Set Training Parameters: ', padx=9, pady=5, row=3) 
         self.fam_switch  = ttl.Switch(self.param_frame, 'Familiar Training :', row=0, col=1)
-        self.stop_switch = ttl.Switch(self.param_frame, 'Early Stopping: ', row=1, col=1)
-        self.trim_switch = ttl.Switch(self.param_frame, 'RIP Trimming: ', row=2, col=1)
+        self.stop_switch = ttl.Switch(self.param_frame, 'Early Stopping: ',    row=1, col=1)
+        self.trim_switch = ttl.Switch(self.param_frame, 'RIP Trimming: ',      row=2, col=1)
 
         self.cycle_fams   = tk.IntVar()
         self.cycle_button = tk.Checkbutton(self.param_frame, text='Cycle?', variable=self.cycle_fams)
         self.cycle_button.grid(row=0, column=3)
         
-        self.upper_bound_entry      = ttl.LabelledEntry(self.param_frame, 'Upper Bound:', tk.IntVar(), default=400, row=3, col=0)
-        self.slice_decrement_entry  = ttl.LabelledEntry(self.param_frame, 'Slice Decrement:', tk.IntVar(), default=20, row=3, col=2)
-        self.lower_bound_entry      = ttl.LabelledEntry(self.param_frame, 'Lower Bound:', tk.IntVar(), default=50, row=4, col=0)
+        self.upper_bound_entry      = ttl.LabelledEntry(self.param_frame, 'Upper Bound:', tk.IntVar(),      default=400, row=3, col=0)
+        self.slice_decrement_entry  = ttl.LabelledEntry(self.param_frame, 'Slice Decrement:', tk.IntVar(),  default=20, row=3, col=2)
+        self.lower_bound_entry      = ttl.LabelledEntry(self.param_frame, 'Lower Bound:', tk.IntVar(),      default=50, row=4, col=0)
         self.n_slice_entry          = ttl.LabelledEntry(self.param_frame, 'Number of Slices:', tk.IntVar(), default=1, row=4, col=2)
         self.trim_switch.dependents = (self.upper_bound_entry, self.slice_decrement_entry, self.lower_bound_entry, self.n_slice_entry)
         
@@ -218,10 +217,9 @@ class PLATINUMS_App:
         #General/Misc
         self.frames   = (self.data_frame, self.input_frame, self.hyperparam_frame, self.param_frame)
         self.switches = (self.fam_switch, self.stop_switch, self.trim_switch)
-        self.entries  = (self.epoch_entry, self.batchsize_entry, self.learnrate_entry, self.n_slice_entry,
-                        self.upper_bound_entry, self.slice_decrement_entry, self.lower_bound_entry)
+        self.entries  = (self.epoch_entry, self.batchsize_entry, self.learnrate_entry, self.n_slice_entry, self.upper_bound_entry, self.slice_decrement_entry, self.lower_bound_entry)
 
-        self.exit_button  = tk.Button(self.main, text='Exit', padx=22, pady=22, bg='red', command=self.shutdown)
+        self.exit_button  = tk.Button(self.main, text='Exit',  padx=22, pady=22, bg='red', command=self.shutdown)
         self.reset_button = tk.Button(self.main, text='Reset', padx=20, bg='orange', command=self.reset)
         self.exit_button.grid(row=0, column=4)
         self.reset_button.grid(row=4, column=4)
@@ -253,10 +251,11 @@ class PLATINUMS_App:
         '''reset the GUI to the opening state, along with all variables'''
         self.isolate(self.data_frame)
         
-        self.read_status.set_status(False)
-        self.train_button.configure(state='disabled')
         self.json_menu.reset_default()
         self.update_data_file()
+        self.read_status.set_status(False)
+        self.train_button.configure(state='disabled')
+
         self.read_mode.set(None)
         self.cycle_fams.set(0)
         self.save_weights.set(0)
@@ -365,7 +364,6 @@ class PLATINUMS_App:
         self.keras_callbacks.append(TkEpochs(self.train_window))
         
         # ACTUAL TRAINING CYCLE BEGINS
-        save_weights = self.save_weights.get() #  flag for whether or not to save model weights after each training loop
         for familiar_cycling in range(1 + self.cycle_fams.get()):  # if cycling is enabled, run throught the training twice, toggling familiar status in between      
             if familiar_cycling:
                 self.fam_switch.toggle()  # toggle the unfamiliar status the second time through (only occurs if cycling is enabled)
@@ -389,8 +387,8 @@ class PLATINUMS_App:
             try:
                 results_folder.mkdir(parents=True)
             except PermissionError: # catch the exception wherein mkdir fails because the folder is inadvertently open
-                messagebox.showerror('Permission Error', f'Cannot recreate folders while {results_folder_name} is open!\
-                                    \nPlease move up one directory, then click "Retrain"', parent=self.train_window.training_window)
+                messagebox.showerror('Permission Error', f'Cannot delete/write folders while {results_folder_name} is open!\
+                                    \nNavigate to another directory, then click "Retrain"', parent=self.train_window.training_window)
                 self.train_window.button_frame.enable()
                 return
                 
@@ -403,53 +401,32 @@ class PLATINUMS_App:
             # INNER LAYERS OF TRAINING LOOP
             for segment in range(1 + (self.trim_switch.value and self.num_slices or 0)): # by default only train once with the full spectrum. If trimming is enabled...
                 for evaluand_idx, evaluand in enumerate(self.selections):                ## ...then train an extra <number of slices> times (DON"T DO ARITHMETICALLY!)
-                # INITIALIZATION OF SOME INFORMATION REGARDING THE CURRENT ROUND            
+                # INITIALIZATION OF SOME INFORMATION AND DATA FOR THE CURRENT ROUND            
                     self.train_window.set_status('Training...')
                     curr_family = iumsutils.get_family(evaluand)
                     self.train_window.round_progress.increment() # increment round progress
 
                     if segment == 0:  # first segment will always be over the full spectrum, regardless of trimming
-                        lower_bound, upper_bound =  0, self.spectrum_size
+                        lower_bound, upper_bound = 0, self.spectrum_size
                         point_range = 'Full Spectra'
                     else:
                         lower_bound, upper_bound = self.trimming_min, self.trimming_max - self.slice_decrement*(segment - 1) # trimming segments start at segment == 1, hence the -1
                         point_range = f'Points {lower_bound}-{upper_bound}'
                     self.train_window.set_slice(point_range)                 
+ 
+                    eval_data = [ (instance, spectrum[lower_bound:upper_bound]) for instance, (spectrum, vector) in self.chem_data[evaluand].items()]
+                    plot_list = [ ((range(lower_bound, upper_bound), spectrum), instance, 's') for instance, spectrum in eval_data[:num_spectra]]
+                    eval_titles, eval_spectra = map(list, zip(*eval_data)) # unpack the instance names and spectra via zip, convert zip tuples to lists to allow for insertion
+                    eval_set_size = len(eval_data)
+                    self.train_window.set_evaluand(f'{evaluand} ({eval_set_size} instances found)')
 
-                    # EVALUATION AND TRAINING SET SELECTION AND SPLITTING 
-                    plot_list = []
-                    eval_data, eval_titles = [], [] # the first plot, after results are produced, will be the summation plot
-                    features, labels, occurrences = [], [], Counter()
-                    train_set_size, eval_set_size = 0, 0
-
-                    for instance, (data, vector) in self.chem_data.items():
-                        data = data[lower_bound:upper_bound]                      
-                        if iumsutils.isolate_species(instance) == evaluand:  # add all instances of the current species to the evaluation set
-                            eval_set_size += 1
-                            eval_data.append(data)
-                            eval_titles.append(instance)
-
-                            if eval_set_size <= num_spectra:  # add the specified number of sample spectra to the list of plots
-                                plot_list.append( ((range(lower_bound, upper_bound), data), instance, 's'))
-
-                        if iumsutils.isolate_species(instance) != evaluand or fam_training:  # add any instance to the training set, unless its a evaluand
-                            train_set_size += 1                                            # of the current species and unfamiliar training is enabled
-                            features.append(data)
-                            labels.append(vector)
-                            occurrences[iumsutils.get_family(instance)] += 1
-
-                    self.train_window.set_evaluand(f'{evaluand} ({eval_set_size} instances found)')                      
-                    x_train, x_test, y_train, y_test = map(np.array, train_test_split(features, labels, test_size=test_set_proportion)) # keras model only accepts numpy arrays
-
-                    if verbosity:   # optional printout to console, gives overview of the training data and the model settings
-                        for (x, y, group) in ((x_train, y_train, "training"), (x_test, y_test, "test")):
-                            print(f'{x.shape[0]} features & {y.shape[0]} labels in {group} set ({round(100*x.shape[0]/train_set_size, 2)}% of the data)')
-                        print(f'\nOf the {train_set_size} instances in training/test sets:')
-                        for family in self.family_mapping.keys():
-                            print(f'\t{round(100*occurrences[family]/train_set_size, 2)}% of data are {family}')
-
-                    # MODEL CREATION AND TRAINING
-                    if not fam_training or evaluand_idx == 0: # (each spectrum slice) model is only trained during the first evaluand for familiars (since training set is identical throughout familiars)
+                    # TRAIN/TEST SET CREATION, MODEL CREATION, AND MODEL TRAINING
+                    if not fam_training or evaluand_idx == 0: # for familiars, a model is only trained during the first evaluand at each slice (since training set is identical throughout familiars)
+                        training_data = zip( *((spectrum[lower_bound:upper_bound], vector) for species, instances in self.chem_data.items()
+                                                                                           for (spectrum, vector) in instances.values()
+                                                                                           if species != evaluand or fam_training))               
+                        x_train, x_test, y_train, y_test = map(np.array, train_test_split(*training_data, test_size=test_set_proportion)) # keras model only accepts numpy arrays
+                        
                         with tf.device('CPU:0'):     # eschews the requirement for a brand-new NVIDIA graphics card (which we don't have anyways)                      
                             model = Sequential()     # model block is created, layers are added to this block
                             model.add(Dense(512, input_dim=(upper_bound - lower_bound), activation='relu'))  # 512 neuron input layer, size depends on trimming
@@ -457,15 +434,19 @@ class PLATINUMS_App:
                             model.add(Dense(512, activation='relu'))                   # 512 neuron hidden layer
                             model.add(Dense(len(self.families), activation='softmax')) # softmax gives probability distribution of identity over all families
                             model.compile(loss='categorical_crossentropy', optimizer=Adam(lr=self.hyperparams['Learn Rate']), metrics=['accuracy']) 
-                        if verbosity:
+                        
+                        if verbosity: # optional printout to console of some useful information about the model and data
+                            print(f'\'{len(training_data)} total instances in training/test sets;')
+                            for x, y, group in ((x_train, y_train, "training"), (x_test, y_test, "test")):
+                                print(f'{x.shape[0]} features & {y.shape[0]} labels in {group} set ({round(100*x.shape[0]/len(training_data), 2)}% of the data)')
                             model.summary()
 
-                        # model training occurs here
+                        # actual model training occurs here
                         hist = model.fit(x_train, y_train, callbacks=self.keras_callbacks, verbose=verbosity and 2 or 0, 
                                          epochs=self.hyperparams['Number of Epochs'], batch_size=self.hyperparams['Batch Size'])
-                        test_loss, test_acc = model.evaluate(x_test, y_test, verbose=(verbosity and 2 or 0))  # keras' self evaluation of loss and accuracy metrics
-
-                        if save_weights: # if training has not been aborted and saving is enabled, save the model to the current result directory
+                        test_loss, test_acc = model.evaluate(x_test, y_test, verbose=(verbosity and 2 or 0))  # keras' self evaluation of loss and accuracy metric
+                        
+                        if self.save_weights.get(): # if saving is enabled, save the model to the current result directory
                             self.train_window.set_status('Saving Model...')
                             weights_folder = results_folder/point_range/f'{fam_training and fam_str or evaluand} Model Files'
                             model.save(str(weights_folder)) # path can only be str, for some reason
@@ -474,18 +455,16 @@ class PLATINUMS_App:
                             with open(weights_folder/'Training Settings.txt', 'a') as weight_settings_file:
                                 weight_settings_file.write(f'Input Spectrum Slice: {point_range}') # specify the range over which the model can actually be used to predict
 
-                    if self.train_window.end_training:  # condition to escape training loop if training is aborted
-                        messagebox.showerror('Training has Stopped!', 'Training aborted by user;\nProceed from Progress Window', parent=self.train_window.training_window)
-                        self.train_window.button_frame.enable()
-                        return     # without this, aborting training only pauses one iteration of loop
-
+                    if self.train_window.end_training:  # escape training loop if training is aborted
+                            messagebox.showerror('Training has Stopped!', 'Training aborted by user;\nProceed from Progress Window', parent=self.train_window.training_window)
+                            self.train_window.button_frame.enable()
+                            return                    # without a return, aborting training only pauses one iteration of loop        
+                        
                     # PREDICTION OVER EVALUATION SET, EVALUATION OF PERFORMANCE                 
-                    targets, num_correct = [], 0    # produce prediction values using the model and determine the accuracy of these predictions
-                    predictions = [list(prediction) for prediction in model.predict(np.array(eval_data))]
-
+                    predictions = list(model.predict(np.array(eval_spectra)))
+                    targets, num_correct = [], 0   # produce prediction values using the model and determine the accuracy of these predictions
                     for prediction in predictions:
-                        target_index = self.family_mapping[curr_family].index(1)
-                        target = prediction[target_index]
+                        target = prediction[self.family_mapping[curr_family].index(1)]
                         targets.append(target)
 
                         if max(prediction) == target:
@@ -510,7 +489,6 @@ class PLATINUMS_App:
                     if point_range not in self.summaries:    # adding relevant data to the summary dict                                 
                         self.summaries[point_range] = ( [], {} )
                     fermi_data, score_data = self.summaries[point_range]
-
                     fermi_data.append(fermi_plot)
 
                     if curr_family not in score_data:
@@ -550,8 +528,7 @@ class PLATINUMS_App:
         self.train_window.button_frame.enable()  # open up post-training options in the training window
         self.train_window.abort_button.configure(state='disabled') # disable the abort button (idiotproofing against its use after training)
         self.train_window.set_status('Finished')
-        messagebox.showinfo('Training Completed Succesfully!', f'Training results can be found in folder:\n{results_folder.parents[0]}',
-                            parent=self.train_window.training_window)  # ensure the message originates from the training window's root
+        messagebox.showinfo('Training Completed Succesfully!', f'Training results can be found in folder:\n{results_folder.parents[0]}', parent=self.train_window.training_window) 
     
     def reset_training(self):
         '''Dedicated reset method for the training cycle, necessary to allow for cycling and retraining'''
@@ -561,7 +538,7 @@ class PLATINUMS_App:
         self.summaries.clear()
         self.keras_callbacks.clear()
         
-
+        
 if __name__ == '__main__':        
     main_window = tk.Tk()
     app = PLATINUMS_App(main_window)
