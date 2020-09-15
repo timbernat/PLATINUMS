@@ -3,10 +3,9 @@ import iumsutils           # library of functions specific to my "-IUMS" class o
 import TimTkLib as ttl     # library of custom tkinter widgets I've written to make GUI assembly more straightforward 
 
 # Built-in Imports
-import json
+import json, shutil
 from time import time                      
 from pathlib import Path
-from shutil import rmtree, copyfile
 from collections import Counter
 import tkinter as tk    # Built-In GUI imports
 from tkinter import messagebox
@@ -52,33 +51,33 @@ class TrainingWindow():
         self.end_training = False
         
         # Status Printouts
-        self.status_frame = tk.Frame(self.training_window, bd=2, padx=20, relief='groove')
+        self.status_frame = tk.Frame(self.training_window, bd=2, padx=9, relief='groove')
         self.status_frame.grid(row=0, column=0)
         
-        self.member_label   = tk.Label(self.status_frame, text='Current Species: ')
-        self.curr_member    = tk.Label(self.status_frame)
+        self.evaluand_label = tk.Label(self.status_frame, text='Current Evaluand: ')
+        self.curr_evaluand  = tk.Label(self.status_frame)
         self.slice_label    = tk.Label(self.status_frame, text='Current Data Slice: ')
         self.curr_slice     = tk.Label(self.status_frame)
-        self.fam_label      = tk.Label(self.status_frame, text='Training Type: ')
+        self.fam_label      = tk.Label(self.status_frame, text='Evaluation Type: ')
         self.curr_fam       = tk.Label(self.status_frame)
-        self.round_label    = tk.Label(self.status_frame, text='Training Round: ')
-        self.round_progress = ttl.NumberedProgBar(self.status_frame, total_rounds, row=3, col=1)
+        self.round_label    = tk.Label(self.status_frame, text='Evaluation Round: ')
+        self.round_progress = ttl.NumberedProgBar(self.status_frame, total_rounds, length=260, row=3, col=1)
         self.epoch_label    = tk.Label(self.status_frame, text='Training Epoch: ')
-        self.epoch_progress = ttl.NumberedProgBar(self.status_frame, num_epochs, style_num=2, row=4, col=1) 
+        self.epoch_progress = ttl.NumberedProgBar(self.status_frame, num_epochs, length=260, style_num=2, row=4, col=1) 
         self.status_label   = tk.Label(self.status_frame, text='Current Status: ')
         self.curr_status    = tk.Label(self.status_frame)
         
-        self.member_label.grid(  row=0, column=0)
-        self.curr_member.grid(   row=0, column=1, sticky='w')
-        self.slice_label.grid(   row=1, column=0)
+        self.evaluand_label.grid(row=0, column=0, sticky='w')
+        self.curr_evaluand.grid( row=0, column=1, sticky='w')
+        self.slice_label.grid(   row=1, column=0, sticky='w')
         self.curr_slice.grid(    row=1, column=1, sticky='w')
-        self.fam_label.grid(     row=2, column=0)
+        self.fam_label.grid(     row=2, column=0, sticky='w')
         self.curr_fam.grid(      row=2, column=1, sticky='w')
-        self.round_label.grid(   row=3, column=0)
+        self.round_label.grid(   row=3, column=0, sticky='w')
         #self.round_progress, like all ttl widgets, has gridding built-in
-        self.epoch_label.grid(   row=4, column=0)
+        self.epoch_label.grid(   row=4, column=0, sticky='w')
         #self.epoch_progress, like all ttl widgets, has gridding built-in
-        self.status_label.grid(  row=5, column=0)
+        self.status_label.grid(  row=5, column=0, sticky='w')
         self.curr_status.grid(   row=5, column=1, sticky='w')
         
         self.reset() # ensure menu begins at default status when instantiated
@@ -105,7 +104,7 @@ class TrainingWindow():
         self.reset()
         
     def reset(self):
-        self.set_member('---')
+        self.set_evaluand('---')
         self.set_slice('---')
         self.set_familiar_status('---')
         self.set_round_progress(0)
@@ -117,8 +116,8 @@ class TrainingWindow():
         readout.configure(text=value)
         self.main.update()
     
-    def set_member(self, member):
-        self.set_readout(self.curr_member, member)
+    def set_evaluand(self, evaluand):
+        self.set_readout(self.curr_evaluand, evaluand)
     
     def set_slice(self, data_slice):
         self.set_readout(self.curr_slice, data_slice)
@@ -147,7 +146,7 @@ class PLATINUMS_App:
         
         #Main Window
         self.main = main
-        self.main.title('PLATIN-UMS 4.4.0-alpha')
+        self.main.title('PLATIN-UMS 4.4.2-alpha')
         self.main.geometry('445x420')
 
         #Frame 1
@@ -231,7 +230,7 @@ class PLATINUMS_App:
         self.train_button.grid(row=4, column=0)
         self.train_window = None
         self.summaries    = {}
-
+        
     #General Methods
     def isolate(self, on_frame):
         '''Enable just one frame.'''
@@ -293,7 +292,7 @@ class PLATINUMS_App:
     
     #Frame 2 (Input) Methods
     def further_sel(self): 
-        '''logic for selection of members to include in training, based on the chosen selection mode'''
+        '''logic for selection of evaluands to include in training, based on the chosen selection mode'''
         self.selections.clear()
         if self.read_mode.get() == 'Select All':
             self.selections = self.species
@@ -375,31 +374,38 @@ class PLATINUMS_App:
             # FILE MANAGEMENT FOR TRAIN SETTINGS RECORD AND RESULTS FOLDERS
             start_time = time()    # log start of runtime, will re-log if cycling is enabled
             fam_training = self.fam_switch.value    
-            familiar_str = f'{fam_training and "F" or "Unf"}amiliar'  # some str formatting based on whether the current training type is familiar or unfamiliar
-            self.train_window.set_familiar_status(familiar_str)
+            fam_str = f'{fam_training and "F" or "Unf"}amiliar'  # some str formatting based on whether the current training type is familiar or unfamiliar
+            self.train_window.set_familiar_status(fam_str)
             
             self.train_window.set_status('Creating Folders...') 
-            results_folder = Path('Saved Training Results', f'{self.data_file.stem} Results', f'{self.hyperparams["Number of Epochs"]}-epoch {familiar_str}')
+            results_folder_name = f'{self.hyperparams["Number of Epochs"]}-epoch {fam_str}'
+            results_folder = Path('Saved Training Results', f'{self.data_file.stem} Results', results_folder_name)
             if results_folder.exists():   # prompt user to overwrite file if one already exists
                 if messagebox.askyesno('Duplicates Found', 'Folder with same data settings found;\nOverwrite old folder?'): 
-                    rmtree(results_folder, ignore_errors=True)
+                    shutil.rmtree(results_folder, ignore_errors=True)
                 else:
                     self.reset_training()
                     return  #terminate prematurely if overwrite permission is not given
-            results_folder.mkdir(parents=True)
-
-            with open(results_folder/'Training Settings.txt', 'a') as settings_file:  # make these variables more compact at some point
+            try:
+                results_folder.mkdir(parents=True)
+            except PermissionError: # catch the exception wherein mkdir fails because the folder is inadvertently open
+                messagebox.showerror('Permission Error', f'Cannot recreate folders while {results_folder_name} is open!\
+                                    \nPlease move up one directory, then click "Retrain"', parent=self.train_window.training_window)
+                self.train_window.button_frame.enable()
+                return
+                
+            with open(results_folder/'Training Settings.txt', 'a') as settings_file:  # record info about training parameters to a text file in the results folder
                 settings_file.write(f'Source File : {self.data_file.name}\n\n')
                 settings_file.write(f'Familiar Training : {fam_training}\n')
                 for hyperparam, value in self.hyperparams.items():
                     settings_file.write(f'{hyperparam} : {value}\n')
             
             # INNER LAYERS OF TRAINING LOOP
-            for member in self.selections: # iterate over all species selected for evaluation
-                for segment in range(1 + (self.trim_switch.value and self.num_slices or 0)): # by default only train once with the full spectrum. If trimming is enabled...
-                # INITIALIZATION OF SOME INFORMATION REGARDING THE CURRENT ROUND             ## ...then train an extra <number of slices> times (DON"T DO ARITHMETICALLY!)
+            for segment in range(1 + (self.trim_switch.value and self.num_slices or 0)): # by default only train once with the full spectrum. If trimming is enabled...
+                for evaluand_idx, evaluand in enumerate(self.selections):                ## ...then train an extra <number of slices> times (DON"T DO ARITHMETICALLY!)
+                # INITIALIZATION OF SOME INFORMATION REGARDING THE CURRENT ROUND            
                     self.train_window.set_status('Training...')
-                    curr_family = iumsutils.get_family(member)
+                    curr_family = iumsutils.get_family(evaluand)
                     self.train_window.round_progress.increment() # increment round progress
 
                     if segment == 0:  # first segment will always be over the full spectrum, regardless of trimming
@@ -410,7 +416,7 @@ class PLATINUMS_App:
                         point_range = f'Points {lower_bound}-{upper_bound}'
                     self.train_window.set_slice(point_range)                 
 
-                # EVALUATION AND TRAINING SET SELECTION AND SPLITTING 
+                    # EVALUATION AND TRAINING SET SELECTION AND SPLITTING 
                     plot_list = []
                     eval_data, eval_titles = [], [] # the first plot, after results are produced, will be the summation plot
                     features, labels, occurrences = [], [], Counter()
@@ -418,7 +424,7 @@ class PLATINUMS_App:
 
                     for instance, (data, vector) in self.chem_data.items():
                         data = data[lower_bound:upper_bound]                      
-                        if iumsutils.isolate_species(instance) == member:  # add all instances of the current species to the evaluation set
+                        if iumsutils.isolate_species(instance) == evaluand:  # add all instances of the current species to the evaluation set
                             eval_set_size += 1
                             eval_data.append(data)
                             eval_titles.append(instance)
@@ -426,48 +432,54 @@ class PLATINUMS_App:
                             if eval_set_size <= num_spectra:  # add the specified number of sample spectra to the list of plots
                                 plot_list.append( ((range(lower_bound, upper_bound), data), instance, 's'))
 
-                        if iumsutils.isolate_species(instance) != member or fam_training:  # add any instance to the training set, unless its a member
+                        if iumsutils.isolate_species(instance) != evaluand or fam_training:  # add any instance to the training set, unless its a evaluand
                             train_set_size += 1                                            # of the current species and unfamiliar training is enabled
                             features.append(data)
                             labels.append(vector)
                             occurrences[iumsutils.get_family(instance)] += 1
 
-                    self.train_window.set_member(f'{member} ({eval_set_size} instances found)')                      
+                    self.train_window.set_evaluand(f'{evaluand} ({eval_set_size} instances found)')                      
                     x_train, x_test, y_train, y_test = map(np.array, train_test_split(features, labels, test_size=test_set_proportion)) # keras model only accepts numpy arrays
 
                     if verbosity:   # optional printout to console, gives overview of the training data and the model settings
                         for (x, y, group) in ((x_train, y_train, "training"), (x_test, y_test, "test")):
                             print(f'{x.shape[0]} features & {y.shape[0]} labels in {group} set ({round(100*x.shape[0]/train_set_size, 2)}% of the data)')
-                        print(f'\n{len(self.chem_data)} features total. Of the {train_set_size} instances in training dataset:')
+                        print(f'\nOf the {train_set_size} instances in training/test sets:')
                         for family in self.family_mapping.keys():
                             print(f'\t{round(100*occurrences[family]/train_set_size, 2)}% of data are {family}')
 
-                # MODEL CREATION AND TRAINING
-                    with tf.device('CPU:0'):     # eschews the requirement for a brand-new NVIDIA graphics card (which we don't have anyways)                      
-                        model = Sequential()     # model block is created, layers are added to this block
-                        model.add(Dense(512, input_dim=(upper_bound - lower_bound), activation='relu'))  # 512 neuron input layer, size depends on trimming
-                        model.add(Dropout(0.5))                                    # dropout layer, to reduce overfit
-                        model.add(Dense(512, activation='relu'))                   # 512 neuron hidden layer
-                        model.add(Dense(len(self.families), activation='softmax')) # softmax gives probability distribution of identity over all families
-                        model.compile(loss='categorical_crossentropy', optimizer=Adam(lr=self.hyperparams['Learn Rate']), metrics=['accuracy']) 
-                    if verbosity:
-                        model.summary()
+                    # MODEL CREATION AND TRAINING
+                    if not fam_training or evaluand_idx == 0: # (each spectrum slice) model is only trained during the first evaluand for familiars (since training set is identical throughout familiars)
+                        with tf.device('CPU:0'):     # eschews the requirement for a brand-new NVIDIA graphics card (which we don't have anyways)                      
+                            model = Sequential()     # model block is created, layers are added to this block
+                            model.add(Dense(512, input_dim=(upper_bound - lower_bound), activation='relu'))  # 512 neuron input layer, size depends on trimming
+                            model.add(Dropout(0.5))                                    # dropout layer, to reduce overfit
+                            model.add(Dense(512, activation='relu'))                   # 512 neuron hidden layer
+                            model.add(Dense(len(self.families), activation='softmax')) # softmax gives probability distribution of identity over all families
+                            model.compile(loss='categorical_crossentropy', optimizer=Adam(lr=self.hyperparams['Learn Rate']), metrics=['accuracy']) 
+                        if verbosity:
+                            model.summary()
 
-                    # model training occurs here
-                    hist = model.fit(x_train, y_train, callbacks=self.keras_callbacks, verbose=verbosity and 2 or 0, 
-                                     epochs=self.hyperparams['Number of Epochs'], batch_size=self.hyperparams['Batch Size'])
-                    test_loss, test_acc = model.evaluate(x_test, y_test, verbose=(verbosity and 2 or 0))  # keras' self evaluation of loss and accuracy metrics
+                        # model training occurs here
+                        hist = model.fit(x_train, y_train, callbacks=self.keras_callbacks, verbose=verbosity and 2 or 0, 
+                                         epochs=self.hyperparams['Number of Epochs'], batch_size=self.hyperparams['Batch Size'])
+                        test_loss, test_acc = model.evaluate(x_test, y_test, verbose=(verbosity and 2 or 0))  # keras' self evaluation of loss and accuracy metrics
+
+                        if save_weights: # if training has not been aborted and saving is enabled, save the model to the current result directory
+                            self.train_window.set_status('Saving Model...')
+                            weights_folder = results_folder/point_range/f'{fam_training and fam_str or evaluand} Model Files'
+                            model.save(str(weights_folder)) # path can only be str, for some reason
+                            
+                            shutil.copy(results_folder/'Training Settings.txt', weights_folder) # copy training settings file to the model folder for removability
+                            with open(weights_folder/'Training Settings.txt', 'a') as weight_settings_file:
+                                weight_settings_file.write(f'Input Spectrum Slice: {point_range}') # specify the range over which the model can actually be used to predict
 
                     if self.train_window.end_training:  # condition to escape training loop if training is aborted
-                        messagebox.showerror('Training has Stopped!', 'Training aborted by user;\nProceed from Progress Window')
+                        messagebox.showerror('Training has Stopped!', 'Training aborted by user;\nProceed from Progress Window', parent=self.train_window.training_window)
                         self.train_window.button_frame.enable()
                         return     # without this, aborting training only pauses one iteration of loop
 
-                    if save_weights: # if training has not been aborted and saving is enabled, save the model to the current result directory
-                        self.train_window.set_status('Saving Model...')
-                        model.save(str(results_folder/point_range/f'{member} Model Files')) # path can only be str, for some reason
-
-                # PREDICTION OVER EVALUATION SET, EVALUATION OF PERFORMANCE                 
+                    # PREDICTION OVER EVALUATION SET, EVALUATION OF PERFORMANCE                 
                     targets, num_correct = [], 0    # produce prediction values using the model and determine the accuracy of these predictions
                     predictions = [list(prediction) for prediction in model.predict(np.array(eval_data))]
 
@@ -482,11 +494,10 @@ class PLATINUMS_App:
                     targets.sort(reverse=True)
                     fermi_data = iumsutils.normalized(targets)
 
-
-                # PACKAGING OF ALL PLOTS, APART FROM THE EVALUATION SPECTRA
+                    # PACKAGING OF ALL PLOTS, APART FROM THE EVALUATION SPECTRA
                     loss_plot     = (hist.history['loss'], 'Training Loss (Final = %0.2f)' % test_loss, 'm') 
                     accuracy_plot = (hist.history['accuracy'], 'Training Accuracy (Final = %0.2f%%)' % (100 * test_acc), 'm') 
-                    fermi_plot    = (fermi_data, f'{member}, {num_correct}/{eval_set_size} correct', 'f')  
+                    fermi_plot    = (fermi_data, f'{evaluand}, {num_correct}/{eval_set_size} correct', 'f')  
 
                     predictions.insert(0, [iumsutils.average(column) for column in zip(*predictions)]) # prepend standardized sum of predictions to predictions
                     eval_titles.insert(0, 'Standardized Summation') # prepend label to the above list to the titles list
@@ -505,7 +516,7 @@ class PLATINUMS_App:
                     if curr_family not in score_data:
                         score_data[curr_family] = ( [], [] )
                     names, scores = score_data[curr_family]
-                    names.append(member)
+                    names.append(evaluand)
                     scores.append(round(num_correct/eval_set_size, 4))
 
                 # CREATION OF FOLDERS, IF NECESSARY, AND PLOTS FOR THE CURRENT ROUND
@@ -513,7 +524,7 @@ class PLATINUMS_App:
                     point_folder = results_folder/point_range # folder containing results for the current spectrum slice 
                     if not point_folder.exists():                                                           
                         point_folder.mkdir(parents=True)
-                    iumsutils.adagraph(plot_list, save_dir=results_folder/point_range/member)
+                    iumsutils.adagraph(plot_list, save_dir=results_folder/point_range/evaluand)
         
             # DISTRIBUTION OF SUMMARY DATA TO APPROPRIATE RESPECTIVE FOLDERS
             self.train_window.set_status('Distributing Result Summaries...')  
