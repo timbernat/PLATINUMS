@@ -98,32 +98,32 @@ def adagraph(plot_list, ncols=6, save_dir=None, display_size=20):  # ADD AXIS LA
         
         
 # file conversion methods - csv to json and vice versa-------------------------------------------------------------------------------------------------
-def jsonize(source_file_name): # add families count as well
+def jsonize(source_file_name): 
     '''Process spectral data csvs, generating labels, vector mappings, species counts, and other information,
     then cast the data to a json for ease of data reading in other applications and methods'''
-    chem_data, species, families, family_mapping, spectrum_size, species_count, family_count = ({}, set(), set(), {}, 0, Counter(), Counter())
     with open(f'{source_file_name}.csv', 'r') as csv_file:
-        for row in csv.reader(csv_file):
-            instance, spectrum = row[0], [float(i) for i in row[1:]]
-            chem_data[instance] = spectrum
-            
-            species.add(isolate_species(instance))
-            species_count[isolate_species(instance)] += 1
-            
-            families.add(get_family(instance))
-            family_count[get_family(instance)] += 1
-             
-            if not spectrum_size: # record size of first spectrum, throw an error if any subsequent spectra are not the same size
-                spectrum_size = len(spectrum)
-            elif len(spectrum) != spectrum_size:
+        data_dict = {row[0] : [float(i) for i in row[1:]] for row in csv.reader(csv_file)} # pull out a dict of instance : spectrum pairs to circumvent using up the reader generator
+        
+    for spectrum in data_dict.values():
+        try: 
+            if len(spectrum) != spectrum_size: # throw an error if any of the spectra are a different size than the others
                 raise ValueError('Spectra must all be of the same length')
-                    
-    species, families = sorted(species), sorted(families)  # sort and convert to lists
+        except NameError: # take spectrum_size to be the length of the first spectrum encountered (in that case, spectrum_size is as yet unassigned)
+            spectrum_size = len(spectrum)
     
-    family_mapping = {family : tuple(int(i == family) for i in families) for family in families} # build a dict of onehot mapping vectors by family
-    for instance, data in chem_data.items():  # add mapping vector to all data entries
-        vector = family_mapping[get_family(instance)]
-        chem_data[instance] = (data, vector)
+    species = sorted(set(isolate_species(instance) for instance in data_dict.keys()))   # sorted list of one of each species
+    species_count = Counter(isolate_species(instance) for instance in data_dict.keys()) # dict of the number of each species
+    
+    families = sorted(set(get_family(instance) for instance in data_dict.keys()))       # sorted list of one of each family
+    family_count = Counter(get_family(instance) for instance in data_dict.keys())       # dict of the number of each family
+    family_mapping = {family : tuple(int(i == family) for i in families) for family in families}  # dict of onehot mapping vectors by family
+    
+    chem_data = {}
+    for instance, spectrum in data_dict.items():
+        curr_species = isolate_species(instance)
+        if curr_species not in chem_data:
+            chem_data[curr_species] = {}
+        chem_data[curr_species][instance] = (spectrum, family_mapping[get_family(instance)])
         
     packaged_data = {   # package all the data into a single dict for json dumping
         'chem_data' : chem_data,
@@ -136,14 +136,15 @@ def jsonize(source_file_name): # add families count as well
     }
     with open(f'{source_file_name}.json', 'w') as json_file:
         json.dump(packaged_data, json_file) # dump our data into a json file with the same name as the original datacsv
-
+        
 def csvize(source_file_name):
     '''Inverse of jsonize, takes a processed chemical data json file and reduces it to a csv with just the listed spectra'''
     with open(f'{source_file_name}.json', 'r') as source_file, open(f'{source_file_name}.csv', 'w', newline='') as dest_file:
         json_data = json.load(source_file)
-        for instance, data in json_data['chem_data'].items():
-            row = [instance, *data[0]] # include only the spectrum (not the vector) after the name in the row
-            csv.writer(dest_file).writerow(row)
+        for species, instances in json_data['chem_data'].items():
+            for instance, data in jinstances.items():
+                row = [instance, *data[0]] # include only the spectrum (not the vector) after the name in the row
+                csv.writer(dest_file).writerow(row)
 
             
 # data transformation methods - note that these only work with jsons for simplicity, if you want a csv, then use csvize after the transformation
@@ -155,18 +156,21 @@ def base_transform(file_name, operation=lambda x : x, discriminator=None, indica
         raise FileExistsError('Overwrite permission denied in function call')
     
     with open(source_file_name, 'r') as source_file, open(dest_file_name, 'w', newline='') as dest_file:
-        json_data = json.load(source_file)
+        json_data = json.load(source_file) # this comment is a watermark - 2020, timotej bernat
            
         temp_dict = {} # temporary dictionary is used to allow for deletion of chemdata entries (can't delete while iterating, can't get length in dict comprehension)
-        for instance, (spectrum, vector) in json_data['chem_data'].items():
-            if not discriminator or not discriminator(instance, spectrum):    # only perform the operation if no discriminator exists or if the discrimination criterion is unmet
-                temp_dict[instance] = (operation(spectrum, **opargs), vector) # if no operation is passed, spectra iwll remain unchanged
-        json_data['chem_data'] = temp_dict                              # this comment is a watermark - 2020, timotej bernat
+        for species, instances in json_data['chem_data'].items():
+            if species not in temp_dict:
+                temp_dict[species] = {} # ensure entries for each species exists in the new dict
+            for instance, (spectrum, vector) in instances.items():
+                if not discriminator or not discriminator(instance, spectrum):    # only perform the operation if no discriminator exists or if the discrimination criterion is unmet
+                    temp_dict[species][instance] = (operation(spectrum, **opargs), vector) # if no operation is passed, spectra will remain unchanged
+        json_data['chem_data'] = temp_dict                              
         json_data['spectrum_size'] = len(operation(spectrum, **opargs)) # takes the length to be that of the last spectrum in the set; all spectra are
         # guaranteed to be the same size by the jsonize method, so under a uniform transform, any change in spectrum size should also be uniform throughout
         
         if discriminator:  # only necessary to recount families, species, and instances if spectra are being removed
-            all_instances = json_data['chem_data'].keys()
+            all_instances = [instance for instances in json_data['chem_data'].values() for instance in instances.keys()]
             json_data['families'] = sorted( set(map(get_family, all_instances)) )
             json_data['family_count'] = Counter( map(get_family, all_instances) )
             
@@ -213,14 +217,9 @@ def get_RIP_cutoffs(file_name, lower_limit=0.15, upper_limit=0.95):
     with open(f'{file_name}.json', 'r') as file:
         json_data = json.load(file)
 
-    RIP_ranges = {}
-    for instance, (spectrum, vector) in json_data['chem_data'].items():
-        species = isolate_species(instance)
-        if species not in RIP_ranges: # ensure an entry exists for this species
-            RIP_ranges[species] = []
-
-        RIP_val = max(spectrum[:len(spectrum)//2]) # largest value in the first half of the spectrum is taken to be the RIP
-        RIP_ranges[species].append(RIP_val)
+    # largest value in the first half of the spectrum is taken to be the RIP
+    RIP_ranges = {species : [max(spectrum[:len(spectrum)//2]) for (spectrum, vector) in instances.values()] 
+                  for species, instances in json_data['chem_data'].items()}
 
     for species, RIP_list in RIP_ranges.items():
         RIP_list.sort() # sort the list to be monotonic
@@ -252,20 +251,15 @@ def inspect_spectra(file_name, species, ncols=6, save_dir=None):
     if species not in json_data['species']:
         raise ValueError(f'Species "{species}" not in dataset')
         
-    plot_list = [ ((range(len(spectrum)), spectrum), instance, 's') 
-                  for instance, (spectrum, vector) in json_data['chem_data'].items()
-                  if isolate_species(instance) == species]
+    plot_list = [ ((range(len(spectrum)), spectrum), instance, 's') for instance, (spectrum, vector) in json_data['chem_data'][species].items()]
     adagraph(plot_list, ncols=ncols, save_dir=save_dir)
 
 def analyze_noise(file_name, ncols=4):  # consider making min/avg/max calculations in-place, rather than after reading
     '''Generate a set of plots for all species in a dataset which shows how the baseline noise varies across spectra at each sample point'''
     with open(f'{file_name}.json', 'r') as source_file:
-        json_data, data_by_species = json.load(source_file), {}
-        for instance, (spectrum, vector) in json_data['chem_data'].items():
-            species = isolate_species(instance)
-            if species not in data_by_species:  # ensure entries exists to avoid KeyError
-                data_by_species[species] = []
-            data_by_species[species].append(spectrum)
+        chem_data = json.load(source_file)['chem_data']
+        data_by_species = {species : [spectrum for (spectrum, vector) in instances.values()] 
+                                for species, instances in chem_data.items()}
     
     noise_plots = []
     for species, spectra in data_by_species.items():
@@ -282,7 +276,7 @@ def analyze_fourier_smoothing(file_name, instance, cutoff, nrows=1, ncols=4, dis
     
     fig, axs = plt.subplots(nrows, ncols, figsize=(display_size, display_size * nrows/ncols))
     
-    orig_data = json_data['chem_data'][instance][0]
+    orig_data = json_data['chem_data'][isolate_species(instance)][instance][0]
     axs[0].plot(orig_data, 'c-')
     axs[0].set_title('Original Spectrum')
     
@@ -315,7 +309,7 @@ def analyze_fsmoothing_range(file_name, instance, step_size, ncols=7):
         json_data = json.load(json_file)
     
     x_range = range(json_data['spectrum_size'])
-    orig_data = json_data['chem_data'][instance][0]
+    orig_data = json_data['chem_data'][isolate_species(instance)][instance][0]
     plot_list.append( ((x_range, orig_data), f'Original Spectrum ({instance})', 's') )
     
     fft_data = np.fft.hfft(orig_data)
