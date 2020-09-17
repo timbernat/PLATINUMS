@@ -9,8 +9,8 @@ import math # needed for ceiling function
 class ConfirmButton: 
     '''A basic confirmation button, will execute whatever function is passed to it
     when pressed. Be sure to exclude parenthesis when passing the bound functions'''
-    def __init__(self, frame, funct, padx=5, row=0, col=0, cs=1, sticky=None):
-        self.button =tk.Button(frame, text='Confirm Selection', command=funct, padx=padx)
+    def __init__(self, frame, command, padx=5, row=0, col=0, cs=1, sticky=None):
+        self.button =tk.Button(frame, text='Confirm Selection', command=command, padx=padx)
         self.button.grid(row=row, column=col, columnspan=cs, sticky=sticky)
         
         
@@ -63,7 +63,7 @@ class DynOptionMenu:
         
 class NumberedProgBar():
     '''Progress bar which displays the numerical proportion complete (out of the set total) in the middle of the bar'''
-    def __init__(self, frame, total, default=0, style_num=1, length=240, row=0, col=0, cs=1):
+    def __init__(self, frame, total, default=0, style_num=1, length=260, row=0, col=0, cs=1):
         self.curr_val = None
         self.default = default
         self.total = total
