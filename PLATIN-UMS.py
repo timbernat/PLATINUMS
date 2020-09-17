@@ -151,9 +151,9 @@ class PLATINUMS_App:
         self.exit_button.grid(row=0, column=4)
         self.reset_button.grid(row=4, column=4)
         
-        #self.tpmode = tk.BooleanVar() # option to switch from training to prediction mode, WIP and low priority for now
-        #self.tpmode_button = tk.Checkbutton(self.main, text='Predict', var=self.tpmode, command=self.switch_tpmode)
-        #self.tpmode_button.grid(row=2, column=4)
+        self.tpmode = tk.BooleanVar() # option to switch from training to prediction mode, WIP and low priority for now
+        self.tpmode_button = tk.Checkbutton(self.main, text='Predict', var=self.tpmode, command=self.switch_tpmode, state='disabled')
+        self.tpmode_button.grid(row=2, column=4)
         
         #Frame 1
         self.data_frame  = ttl.ToggleFrame(self.main, text='Select Data File to Read: ', padx=5, pady=5)
