@@ -34,9 +34,10 @@ class StatusBox:
             
 class DynOptionMenu:
     '''My addon to the TKinter OptionMenu, adds methods to conveniently update menu contents'''
-    def __init__(self, frame, var, option_method, default=None, width=10, row=0, col=0, colspan=1):
+    def __init__(self, frame, var, option_method, opargs=None, default=None, width=10, row=0, col=0, colspan=1):
         self.option_method = option_method
-        self.default=default
+        self.opargs = opargs # any additional arguments that need to be passed to the option-getting method
+        self.default = default
         self.menu = tk.OptionMenu(frame, var, (None,) )
         self.menu.configure(width=width)
         self.menu.grid(row=row, column=col, columnspan=colspan)
@@ -56,7 +57,7 @@ class DynOptionMenu:
     
     def update(self):
         self.contents.delete(0, 'end')
-        for option in self.option_method():
+        for option in self.option_method(*self.opargs):
             self.contents.add_command(label=option, command=lambda x=option: self.var.set(x))
         self.reset_default()
         
