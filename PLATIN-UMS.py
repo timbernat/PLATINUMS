@@ -60,9 +60,9 @@ class TrainingWindow():
         self.fam_label      = tk.Label(self.status_frame, text='Evaluation Type: ')
         self.curr_fam       = tk.Label(self.status_frame)
         self.round_label    = tk.Label(self.status_frame, text='Evaluation Round: ')
-        self.round_progress = ttl.NumberedProgBar(self.status_frame, total_rounds, length=260, row=3, col=1)
+        self.round_progress = ttl.NumberedProgBar(self.status_frame, total=total_rounds, row=3, col=1)
         self.epoch_label    = tk.Label(self.status_frame, text='Training Epoch: ')
-        self.epoch_progress = ttl.NumberedProgBar(self.status_frame, num_epochs, length=260, style_num=2, row=4, col=1) 
+        self.epoch_progress = ttl.NumberedProgBar(self.status_frame, total=num_epochs, style_num=2, row=4, col=1) 
         self.status_label   = tk.Label(self.status_frame, text='Current Status: ')
         self.curr_status    = tk.Label(self.status_frame)
         
@@ -82,7 +82,7 @@ class TrainingWindow():
         self.reset() # ensure menu begins at default status when instantiated
     
         #Training Buttons
-        self.button_frame   = ttl.ToggleFrame(self.training_window, '', padx=0, pady=0, row=1)
+        self.button_frame   = ttl.ToggleFrame(self.training_window, text='', padx=0, pady=0, row=1)
         self.retrain_button = tk.Button(self.button_frame, text='Retrain', width=17, bg='dodger blue', command=train_funct)
         self.reinput_button = tk.Button(self.button_frame, text='Reset', width=17, bg='orange', command=reset_funct)
         self.exit_button    = tk.Button(self.button_frame, text='Exit', width=17, bg='red', command=exit_funct)
@@ -135,54 +135,61 @@ class TrainingWindow():
         self.epoch_progress.set_progress(curr_epoch)
         self.main.update()
         
-    def destroy(self):
-        self.train_button.configure(state='normal')
-        self.training_window.destroy()
         
 # Section 2: Start of code for the actual GUI and application ---------------------------------------------------------------------------------------
 class PLATINUMS_App:
-    def __init__(self, main):
-        
+    '''PLATIN-UMS : Prediction, Training, And Labelling INterface for Unlabelled Mobility Spectra'''
+    def __init__(self, main):       
         #Main Window
         self.main = main
-        self.main.title('PLATIN-UMS 4.4.2-alpha')
-        self.main.geometry('445x420')
+        self.main.title('PLATIN-UMS 4.4.5-alpha')
+        self.main.geometry('445x422')
 
+        # General Buttons
+        self.exit_button  = tk.Button(self.main, text='Exit',  padx=22, pady=22, bg='red', command=self.shutdown)
+        self.reset_button = tk.Button(self.main, text='Reset', padx=20, bg='orange', command=self.reset)
+        self.exit_button.grid(row=0, column=4)
+        self.reset_button.grid(row=4, column=4)
+        
+        #self.tpmode = tk.BooleanVar() # option to switch from training to prediction mode, WIP and low priority for now
+        #self.tpmode_button = tk.Checkbutton(self.main, text='Predict', var=self.tpmode, command=self.switch_tpmode)
+        #self.tpmode_button.grid(row=2, column=4)
+        
         #Frame 1
-        self.data_frame  = ttl.ToggleFrame(self.main, 'Select Data File to Read: ', padx=5, pady=5)
+        self.data_frame  = ttl.ToggleFrame(self.main, text='Select Data File to Read: ', padx=5, pady=5)
         self.chosen_file = tk.StringVar()
         self.data_file = None
         self.chem_data, self.species, self.families, self.family_mapping, self.spectrum_size = {}, [], [], {}, 0
         
-        self.json_menu      = ttl.DynOptionMenu(self.data_frame, self.chosen_file, lambda : iumsutils.get_by_filetype('.json'), default='--Choose a JSON--', width=32, colspan=2)
+        self.json_menu      = ttl.DynOptionMenu(self.data_frame, var=self.chosen_file, option_method=iumsutils.get_by_filetype,
+                                                opargs=('.json',), default='--Choose a JSON--', width=32, colspan=2)
         self.read_label     = tk.Label(self.data_frame, text='Read Status:')
         self.read_status    = ttl.StatusBox(self.data_frame, on_message='JSON Read!', off_message='No File Read', width=22, row=1, col=1)
         self.refresh_button = tk.Button(self.data_frame, text='Refresh JSONs', command=self.json_menu.update, padx=15)
-        self.confirm_data   = ttl.ConfirmButton(self.data_frame, self.import_data, padx=5, row=1, col=2, sticky='e')
+        self.confirm_data   = ttl.ConfirmButton(self.data_frame, command=self.import_data, padx=5, row=1, col=2, sticky='e')
         
         self.refresh_button.grid(row=0, column=2, sticky='e')
         self.read_label.grid(    row=1, column=0)
         
         #Frame 2
-        self.input_frame = ttl.ToggleFrame(self.main, 'Select Instances to Evaluate: ', padx=5, pady=5, row=1)
+        self.input_frame = ttl.ToggleFrame(self.main, text='Select Instances to Evaluate: ', padx=5, pady=5, row=1)
         self.read_mode   = tk.StringVar()
         self.read_mode.set(None)
         self.selections  = []
         
-        for i, mode in enumerate(('Select All', 'By Family', 'By Species')):
-            button = tk.Radiobutton(self.input_frame, text=mode, value=mode, var=self.read_mode, command=self.further_sel)
-            button.grid(row=0, column=i)
-        self.confirm_sels = ttl.ConfirmButton(self.input_frame, self.confirm_inputs, row=0, col=3, sticky='e')
+        for i, mode in enumerate(('Select All', 'By Family', 'By Species')): # build the selection type buttons sequentially, don't need to reference these w/in the class after building
+            tk.Radiobutton(self.input_frame, text=mode, value=mode, var=self.read_mode, command=self.further_sel).grid(row=0, column=i)
+        self.confirm_sels = ttl.ConfirmButton(self.input_frame, command=self.confirm_inputs, row=0, col=3, sticky='e')
         self.input_frame.disable()
         
         #Frame 3
         self.hyperparams = {}
         
-        self.hyperparam_frame    = ttl.ToggleFrame(self.main, 'Set Hyperparameters: ', padx=8, pady=5, row=2)
-        self.epoch_entry         = ttl.LabelledEntry(self.hyperparam_frame, 'Epochs:', tk.IntVar(),       width=19, default=2048)
-        self.batchsize_entry     = ttl.LabelledEntry(self.hyperparam_frame, 'Batchsize:', tk.IntVar(),    width=19, default=32, row=1)
-        self.learnrate_entry     = ttl.LabelledEntry(self.hyperparam_frame, 'Learnrate:', tk.DoubleVar(), width=18, default=2e-5, col=3)
-        self.confirm_hyperparams = ttl.ConfirmButton(self.hyperparam_frame, self.confirm_hp, row=1, col=3, cs=2, sticky='e')
+        self.hyperparam_frame    = ttl.ToggleFrame(self.main, text='Set Hyperparameters: ', padx=8, pady=5, row=2)
+        self.epoch_entry         = ttl.LabelledEntry(self.hyperparam_frame, text='Epochs:', var=tk.IntVar(),       width=19, default=2048)
+        self.batchsize_entry     = ttl.LabelledEntry(self.hyperparam_frame, text='Batchsize:', var=tk.IntVar(),    width=19, default=32, row=1)
+        self.learnrate_entry     = ttl.LabelledEntry(self.hyperparam_frame, text='Learnrate:', var=tk.DoubleVar(), width=18, default=2e-5, col=3)
+        self.confirm_hyperparams = ttl.ConfirmButton(self.hyperparam_frame, command=self.confirm_hp, row=1, col=3, cs=2, sticky='e')
         self.hyperparam_frame.disable()
         
         #Frame 4
@@ -192,42 +199,44 @@ class PLATINUMS_App:
         self.num_slices =      None
         self.keras_callbacks = []
         
-        self.param_frame = ttl.ToggleFrame(self.main, 'Set Training Parameters: ', padx=9, pady=5, row=3) 
-        self.fam_switch  = ttl.Switch(self.param_frame, 'Familiar Training :', row=0, col=1)
-        self.stop_switch = ttl.Switch(self.param_frame, 'Early Stopping: ',    row=1, col=1)
-        self.trim_switch = ttl.Switch(self.param_frame, 'RIP Trimming: ',      row=2, col=1)
+        self.param_frame = ttl.ToggleFrame(self.main, text='Set Training Parameters: ', padx=9, pady=5, row=3) 
+        self.fam_switch  = ttl.Switch(self.param_frame, text='Familiar Training :', row=0, col=1)
+        self.stop_switch = ttl.Switch(self.param_frame, text='Early Stopping: ',    row=1, col=1)
+        self.trim_switch = ttl.Switch(self.param_frame, text='RIP Trimming: ',      row=2, col=1)
 
         self.cycle_fams   = tk.IntVar()
         self.cycle_button = tk.Checkbutton(self.param_frame, text='Cycle?', variable=self.cycle_fams)
         self.cycle_button.grid(row=0, column=3)
         
-        self.upper_bound_entry      = ttl.LabelledEntry(self.param_frame, 'Upper Bound:', tk.IntVar(),      default=400, row=3, col=0)
-        self.slice_decrement_entry  = ttl.LabelledEntry(self.param_frame, 'Slice Decrement:', tk.IntVar(),  default=20, row=3, col=2)
-        self.lower_bound_entry      = ttl.LabelledEntry(self.param_frame, 'Lower Bound:', tk.IntVar(),      default=50, row=4, col=0)
-        self.n_slice_entry          = ttl.LabelledEntry(self.param_frame, 'Number of Slices:', tk.IntVar(), default=1, row=4, col=2)
+        self.upper_bound_entry      = ttl.LabelledEntry(self.param_frame, text='Upper Bound:', var=tk.IntVar(),      default=400, row=3, col=0)
+        self.slice_decrement_entry  = ttl.LabelledEntry(self.param_frame, text='Slice Decrement:', var=tk.IntVar(),  default=20, row=3, col=2)
+        self.lower_bound_entry      = ttl.LabelledEntry(self.param_frame, text='Lower Bound:', var=tk.IntVar(),      default=50, row=4, col=0)
+        self.n_slice_entry          = ttl.LabelledEntry(self.param_frame, text='Number of Slices:', var=tk.IntVar(), default=1, row=4, col=2)
         self.trim_switch.dependents = (self.upper_bound_entry, self.slice_decrement_entry, self.lower_bound_entry, self.n_slice_entry)
         
         self.save_weights = tk.IntVar()
         self.save_button  = tk.Checkbutton(self.param_frame, text='Save Models after Training?', variable=self.save_weights)
         self.save_button.grid(row=5, column=0, columnspan=2, sticky='w')
         
-        self.confirm_train_params   = ttl.ConfirmButton(self.param_frame, self.confirm_tparams, row=5, col=2, cs=2, sticky='e')
+        self.confirm_train_params   = ttl.ConfirmButton(self.param_frame, command=self.confirm_tparams, row=5, col=2, cs=2, sticky='e')
         self.param_frame.disable()
 
-        #General/Misc
-        self.frames   = (self.data_frame, self.input_frame, self.hyperparam_frame, self.param_frame)
-        self.switches = (self.fam_switch, self.stop_switch, self.trim_switch)
-        self.entries  = (self.epoch_entry, self.batchsize_entry, self.learnrate_entry, self.n_slice_entry, self.upper_bound_entry, self.slice_decrement_entry, self.lower_bound_entry)
-
-        self.exit_button  = tk.Button(self.main, text='Exit',  padx=22, pady=22, bg='red', command=self.shutdown)
-        self.reset_button = tk.Button(self.main, text='Reset', padx=20, bg='orange', command=self.reset)
-        self.exit_button.grid(row=0, column=4)
-        self.reset_button.grid(row=4, column=4)
-        
-        self.train_button = tk.Button(self.main, text='TRAIN', padx=20, width=45, bg='dodger blue', state='disabled', command=self.training)
-        self.train_button.grid(row=4, column=0)
+        # Frame 5 - contains only the button used to trigger a main action  
         self.train_window = None
         self.summaries    = {}
+        
+        self.activation_frame = ttl.ToggleFrame(self.main, text='', padx=0, pady=0, row=4)
+        
+        self.train_button = tk.Button(self.activation_frame, text='TRAIN', padx=20, width=45, bg='dodger blue', state='disabled', command=self.training)
+        self.train_button.grid(row=0, column=0)
+        self.pred_button = tk.Button(self.activation_frame, text='PREDICT', padx=20, width=45, bg='mediumorchid2', state='disabled', command=lambda:None)
+        self.pred_button.grid(row=0, column=0)
+        self.switch_tpmode()
+        
+        # packaging some similar widgets together to make certain GUI operations easier
+        self.frames   = (self.data_frame, self.input_frame, self.hyperparam_frame, self.param_frame, self.activation_frame)
+        self.switches = (self.fam_switch, self.stop_switch, self.trim_switch)
+        self.entries  = (self.epoch_entry, self.batchsize_entry, self.learnrate_entry, self.n_slice_entry, self.upper_bound_entry, self.slice_decrement_entry, self.lower_bound_entry)
         
     #General Methods
     def isolate(self, on_frame):
@@ -247,6 +256,10 @@ class PLATINUMS_App:
         '''Used to assign the currently selected data file to an internal attribute'''
         self.data_file = Path(self.chosen_file.get())
     
+    def switch_tpmode(self):
+        target_button = self.tpmode.get() and self.pred_button or self.train_button
+        target_button.tkraise()
+    
     def reset(self):
         '''reset the GUI to the opening state, along with all variables'''
         self.isolate(self.data_frame)
@@ -254,7 +267,6 @@ class PLATINUMS_App:
         self.json_menu.reset_default()
         self.update_data_file()
         self.read_status.set_status(False)
-        self.train_button.configure(state='disabled')
 
         self.read_mode.set(None)
         self.cycle_fams.set(0)
@@ -328,7 +340,7 @@ class PLATINUMS_App:
         
         if not self.trim_switch.value: # if RIP trimming is not selected
             self.param_frame.disable()
-            self.train_button.configure(state='normal')
+            self.isolate(self.activation_frame) # make the training button clickable 
         else:  # this comment is a watermark - 2020, timotej bernat
             self.num_slices      = self.n_slice_entry.get_value()
             self.slice_decrement = self.slice_decrement_entry.get_value()
@@ -345,7 +357,7 @@ class PLATINUMS_App:
                 messagebox.showerror('Boundary Mismatch', 'Upper limit will not always exceed lower;\nDecrease either slice decrement or lower bound')
             else:
                 self.param_frame.disable()
-                self.train_button.configure(state='normal')
+                self.isolate(self.activation_frame) # make the training button clickable
         
         
     # Section 2A: the training routine itself, along with a dedicated reset method to avoid overwrites between subsequent trainings
@@ -533,11 +545,10 @@ class PLATINUMS_App:
     def reset_training(self):
         '''Dedicated reset method for the training cycle, necessary to allow for cycling and retraining'''
         if self.train_window: # if a window already exists
-            self.train_window.destroy()
+            self.train_window.training_window.destroy()
             self.train_window = None
         self.summaries.clear()
         self.keras_callbacks.clear()
-        
         
 if __name__ == '__main__':        
     main_window = tk.Tk()
