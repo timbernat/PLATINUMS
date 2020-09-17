@@ -4,7 +4,6 @@ from collections import Counter
 
 import matplotlib.pyplot as plt
 import numpy as np
-from scipy.signal import savgol_filter
 
 # general-use methods to ease may common tasks
 def format_time(sec):
@@ -179,6 +178,11 @@ def base_transform(file_name, operation=lambda x : x, discriminator=None, indica
 
         json.dump(json_data, dest_file) # dump the result in the new file
 
+        
+def filterize(file_name, cutoff=0.5): 
+    '''Most naive possible transform, removes all spectra whose maximum falls below the specified cutoff value (applied indiscriminately to all instances)'''
+    base_transform(file_name, discriminator=lambda instance, spectrum : max(spectrum) < cutoff, indicator='(S)')      
+        
 
 def fft_with_smoothing(spectrum, harmonic_cutoff=None, smooth_only=False):                                                      
     '''Performs a fast Fourier Transform over a spectrum; can optionally cut off higher frequencies, as well as
@@ -196,15 +200,10 @@ def fourierize(file_name, harmonic_cutoff=None, smooth_only=False):
     base_transform(file_name, operation=fft_with_smoothing, indicator=f'(FT{smooth_only and "S" or ""})', harmonic_cutoff=harmonic_cutoff, smooth_only=smooth_only)
 
     
-def sav_golay_smoothing(spectrum, window_length=5, polyorder=1):
-    '''Wrapper to convert SG-smoothed ndarray into lists for packaging into jsons'''
-    return list(savgol_filter(spectrum, window_length=window_length, polyorder=polyorder))
-    
-def filterize(file_name, cutoff=0.5):  # this method is very much WIP, quality of normalization cannot be spoken for at the time of writing
-    '''Duplicate a dataset, omitting all spectra whose maximum falls below the specified cutoff value and applying Savitzky-Golay Filtering'''
-    base_transform(file_name, operation=sav_golay_smoothing, discriminator=lambda instance, spectrum : max(spectrum) < cutoff, indicator='(S)')
-
-    
+def get_RIP(mode1_spectrum):
+    '''Naive but surprisingly effective method for identifying the RIP value for Mode 1 spectra'''
+    return max(mode1_spectrum[:len(mode1_spectrum)//2]) # takes the RIP to be the maximum value in the first half of the spectrum
+        
 def get_RIP_cutoffs(file_name, lower_limit=0.15, upper_limit=0.95): 
     '''Helper method for filtering Mode 1 data specifically. Takes a json file and normalized lower and upper limits (from 0 to 1)
     and returns a dict (by species) of the lower and upper RIP cutoff values corresponding to these limits'''
@@ -218,17 +217,16 @@ def get_RIP_cutoffs(file_name, lower_limit=0.15, upper_limit=0.95):
         json_data = json.load(file)
 
     # largest value in the first half of the spectrum is taken to be the RIP
-    RIP_ranges = {species : [max(spectrum[:len(spectrum)//2]) for (spectrum, vector) in instances.values()] 
-                  for species, instances in json_data['chem_data'].items()}
-
+    RIP_ranges = {species : sorted(get_RIP(spectrum) for (spectrum, vector) in instances.values()) # order and normalize all RIP values of a given species species
+                                                     for species, instances in json_data['chem_data'].items()}   # do this for all species in the data
+    
     for species, RIP_list in RIP_ranges.items():
-        RIP_list.sort() # sort the list to be monotonic
-        lower_cutoff, *middle, upper_cutoff = [val for i, val in enumerate(RIP_list) if lower_limit < normalized(RIP_list)[i] < upper_limit] 
-        RIP_ranges[species] = (lower_cutoff, upper_cutoff) # list comprehension determines bounds based on the prescribed limits within a normalized RIP set
+        lower_cutoff, *middle, upper_cutoff = [val for i, val in enumerate(RIP_list) if lower_limit < normalized(RIP_list)[i] < upper_limit] # return ORIGINAL values if normalized values are within the cutoff range
+        RIP_ranges[species] = (lower_cutoff, upper_cutoff) # throw out the midpoints within the range and only return the endpoints as cutoffs
     
     return RIP_ranges  
 
-def filterize_mode1(file_name, lower_limit=0.15, upper_limit=0.95):
+def filterize_mode1(file_name, lower_limit=0.15, upper_limit=0.95, species_cap=80):
     '''Filtering regime specific to Mode 1, will not work with other Modes, and Mode 1 sets should not be used with other filtering regimes.
     Culls all spectra whose RIP lies outside of some prescribed normalized bounds for the RIP for that particular species'''
     RIP_cutoffs = get_RIP_cutoffs(file_name, lower_limit=lower_limit, upper_limit=upper_limit)
@@ -237,7 +235,7 @@ def filterize_mode1(file_name, lower_limit=0.15, upper_limit=0.95):
         '''Discriminator function for this regime, necessary to define this as a function-in-a-function, as the parameters
         will change depending on the limits passed, opted for def rather than lambda for readability'''
         lower_cutoff, upper_cutoff = RIP_cutoffs[isolate_species(instance)] # find the correct cutoffs by species for the current instance
-        return not (lower_cutoff < max(spectrum[:len(spectrum)//2]) < upper_cutoff) # flag if RIP is not within these cutoffs
+        return not (lower_cutoff < get_RIP(spectrum) < upper_cutoff) # flag if RIP is not within these cutoffs
     
     base_transform(file_name, discriminator=discriminator, indicator='(S1)')
     
