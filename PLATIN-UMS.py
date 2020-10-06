@@ -142,7 +142,7 @@ class PLATINUMS_App:
     def __init__(self, main):       
         #Main Window
         self.main = main
-        self.main.title('PLATIN-UMS 4.4.5-alpha')
+        self.main.title('PLATIN-UMS 4.5.0-alpha')
         self.main.geometry('445x422')
 
         # General Buttons
@@ -257,6 +257,7 @@ class PLATINUMS_App:
         self.data_file = Path(self.chosen_file.get())
     
     def switch_tpmode(self):
+        '''Used to switch the mode of the training button, HEAVILY WIP at the moment'''
         target_button = self.tpmode.get() and self.pred_button or self.train_button
         target_button.tkraise()
     
@@ -294,8 +295,14 @@ class PLATINUMS_App:
         if self.data_file == '--Choose a JSON--':
             messagebox.showerror('File Error', 'No JSON selected')
         else:
-            with open(self.data_file, 'r') as data_file:  # unpack and dicard the counts for now
-                self.chem_data, self.species, self.families, self.family_mapping, self.spectrum_size, *counts = json.load(data_file).values()
+            with open(self.data_file, 'r') as data_file:  # read in file data, discard counts for the time being
+                json_data = json.load(data_file)
+            self.chem_data = [iumsutils.Instance(*properties) for properties in json_data['chem_data']] # unpack data into Instance objects
+            self.species = json_data['species']
+            self.families = json_data['families']
+            self.family_mapping = json_data['family_mapping']
+            self.spectrum_size = json_data['spectrum_size']
+            
             self.upper_bound_entry.set_value(self.spectrum_size) # adjust the slicing upper bound to the size of spectra passed
             self.read_status.set_status(True)
             self.isolate(self.input_frame)
@@ -399,8 +406,8 @@ class PLATINUMS_App:
             try:
                 results_folder.mkdir(parents=True)
             except PermissionError: # catch the exception wherein mkdir fails because the folder is inadvertently open
-                messagebox.showerror('Permission Error', f'Cannot delete/write folders while {results_folder_name} is open!\
-                                    \nNavigate to another directory, then click "Retrain"', parent=self.train_window.training_window)
+                messagebox.showerror('Permission Error', f'Cannot overwrite folders while {results_folder_name} is open!\
+                                    \nPlease click "Retrain" to retry training', parent=self.train_window.training_window)
                 self.train_window.button_frame.enable()
                 return
                 
@@ -426,17 +433,15 @@ class PLATINUMS_App:
                         point_range = f'Points {lower_bound}-{upper_bound}'
                     self.train_window.set_slice(point_range)                 
  
-                    eval_data = [ (instance, spectrum[lower_bound:upper_bound]) for instance, (spectrum, vector) in self.chem_data[evaluand].items()]
-                    plot_list = [ ((range(lower_bound, upper_bound), spectrum), instance, 's') for instance, spectrum in eval_data[:num_spectra]]
+                    eval_data = [(instance.name, instance.spectrum[lower_bound:upper_bound]) for instance in self.chem_data if instance.species == evaluand]
                     eval_titles, eval_spectra = map(list, zip(*eval_data)) # unpack the instance names and spectra via zip, convert zip tuples to lists to allow for insertion
                     eval_set_size = len(eval_data)
                     self.train_window.set_evaluand(f'{evaluand} ({eval_set_size} instances found)')
 
                     # TRAIN/TEST SET CREATION, MODEL CREATION, AND MODEL TRAINING
-                    if not fam_training or evaluand_idx == 0: # for familiars, a model is only trained during the first evaluand at each slice (since training set is identical throughout familiars)
-                        training_data = zip( *((spectrum[lower_bound:upper_bound], vector) for species, instances in self.chem_data.items()
-                                                                                           for (spectrum, vector) in instances.values()
-                                                                                           if species != evaluand or fam_training))               
+                    if not fam_training or evaluand_idx == 0: # for familiars, model is only trained during first evaluand at each slice (since training set is identical throughout)
+                        training_data = zip( *((instance.spectrum[lower_bound:upper_bound], instance.vector) for instance in self.chem_data
+                                                                                           if instance.species != evaluand or fam_training))               
                         x_train, x_test, y_train, y_test = map(np.array, train_test_split(*training_data, test_size=test_set_proportion)) # keras model only accepts numpy arrays
                         
                         with tf.device('CPU:0'):     # eschews the requirement for a brand-new NVIDIA graphics card (which we don't have anyways)                      
@@ -458,7 +463,12 @@ class PLATINUMS_App:
                                          epochs=self.hyperparams['Number of Epochs'], batch_size=self.hyperparams['Batch Size'])
                         test_loss, test_acc = model.evaluate(x_test, y_test, verbose=(verbosity and 2 or 0))  # keras' self evaluation of loss and accuracy metric
                         
-                        if self.save_weights.get(): # if saving is enabled, save the model to the current result directory
+                        if self.train_window.end_training:  # escape training loop if training is aborted
+                            messagebox.showerror('Training has Stopped!', 'Training aborted by user;\nProceed from Progress Window', parent=self.train_window.training_window)
+                            self.train_window.button_frame.enable()
+                            return                    # without a return, aborting training only pauses one iteration of loop 
+                        
+                        elif self.save_weights.get(): # if saving is enabled, save the model to the current result directory
                             self.train_window.set_status('Saving Model...')
                             weights_folder = results_folder/point_range/f'{fam_training and fam_str or evaluand} Model Files'
                             model.save(str(weights_folder)) # path can only be str, for some reason
@@ -466,44 +476,38 @@ class PLATINUMS_App:
                             shutil.copy(results_folder/'Training Settings.txt', weights_folder) # copy training settings file to the model folder for removability
                             with open(weights_folder/'Training Settings.txt', 'a') as weight_settings_file:
                                 weight_settings_file.write(f'Input Spectrum Slice: {point_range}') # specify the range over which the model can actually be used to predict
-
-                    if self.train_window.end_training:  # escape training loop if training is aborted
-                            messagebox.showerror('Training has Stopped!', 'Training aborted by user;\nProceed from Progress Window', parent=self.train_window.training_window)
-                            self.train_window.button_frame.enable()
-                            return                    # without a return, aborting training only pauses one iteration of loop        
+                                
                         
                     # PREDICTION OVER EVALUATION SET, EVALUATION OF PERFORMANCE                 
-                    predictions = list(model.predict(np.array(eval_spectra)))
                     targets, num_correct = [], 0   # produce prediction values using the model and determine the accuracy of these predictions
+                    predictions = list(model.predict(np.array(eval_spectra)))
                     for prediction in predictions:
                         target = prediction[self.family_mapping[curr_family].index(1)]
                         targets.append(target)
 
                         if max(prediction) == target:
                             num_correct += 1
-
                     targets.sort(reverse=True)
-                    fermi_data = iumsutils.normalized(targets)
 
-                    # PACKAGING OF ALL PLOTS, APART FROM THE EVALUATION SPECTRA
-                    loss_plot     = (hist.history['loss'], 'Training Loss (Final = %0.2f)' % test_loss, 'm') 
-                    accuracy_plot = (hist.history['accuracy'], 'Training Accuracy (Final = %0.2f%%)' % (100 * test_acc), 'm') 
-                    fermi_plot    = (fermi_data, f'{evaluand}, {num_correct}/{eval_set_size} correct', 'f')  
+                    # PACKAGING OF ALL PLOTS
+                    spectra_plots = [iumsutils.BundledPlot(data=spectrum, title=name, x_data=range(lower_bound, upper_bound)) for name, spectrum in eval_data[:num_spectra]]
+                    loss_plot     = iumsutils.BundledPlot(data=hist.history['loss'], title=f'Training Loss (Final = {test_loss:0.2f})', plot_type='m') 
+                    accuracy_plot = iumsutils.BundledPlot(data=hist.history['accuracy'], title=f'Training Accuracy (Final = {100*test_acc:0.2f})', plot_type='m') 
+                    fermi_plot    = iumsutils.BundledPlot(data=iumsutils.normalized(targets), title=f'{evaluand}, {num_correct}/{eval_set_size} correct', plot_type='f')  
 
                     predictions.insert(0, [iumsutils.average(column) for column in zip(*predictions)]) # prepend standardized sum of predictions to predictions
                     eval_titles.insert(0, 'Standardized Summation') # prepend label to the above list to the titles list
-                    prediction_plots = [((self.family_mapping.keys(), prediction), eval_titles[i], 'p') for i, prediction in enumerate(predictions)]  
-
-                    for plot in (loss_plot, accuracy_plot, fermi_plot, *prediction_plots): # collate together the plot data tuples (will implement as objects)
-                        plot_list.append(plot)    
+                    prediction_plots = [iumsutils.BundledPlot(data=prediction, title=eval_titles[i], plot_type='p', x_data=self.family_mapping.keys())
+                                                                    for i, prediction in enumerate(predictions)]  
+                    plots = [*spectra_plots, loss_plot, accuracy_plot, fermi_plot, *prediction_plots] # list containing all plots that will be plotted
 
                 # ORGANIZATION AND ADDITION OF RELEVANT DATA TO THE SUMMARY DICT
-                    if point_range not in self.summaries:    # adding relevant data to the summary dict                                 
+                    if not self.summaries.get(point_range):    # adding relevant data to the summary dict                                 
                         self.summaries[point_range] = ( [], {} )
                     fermi_data, score_data = self.summaries[point_range]
                     fermi_data.append(fermi_plot)
 
-                    if curr_family not in score_data:
+                    if not score_data.get(curr_family):
                         score_data[curr_family] = ( [], [] )
                     names, scores = score_data[curr_family]
                     names.append(evaluand)
@@ -514,7 +518,7 @@ class PLATINUMS_App:
                     point_folder = results_folder/point_range # folder containing results for the current spectrum slice 
                     if not point_folder.exists():                                                           
                         point_folder.mkdir(parents=True)
-                    iumsutils.adagraph(plot_list, save_dir=results_folder/point_range/evaluand)
+                    iumsutils.adagraph(plots, save_dir=results_folder/point_range/evaluand)
         
             # DISTRIBUTION OF SUMMARY DATA TO APPROPRIATE RESPECTIVE FOLDERS
             self.train_window.set_status('Distributing Result Summaries...')  
@@ -540,7 +544,7 @@ class PLATINUMS_App:
         self.train_window.button_frame.enable()  # open up post-training options in the training window
         self.train_window.abort_button.configure(state='disabled') # disable the abort button (idiotproofing against its use after training)
         self.train_window.set_status('Finished')
-        messagebox.showinfo('Training Completed Succesfully!', f'Training results can be found in folder:\n{results_folder.parents[0]}', parent=self.train_window.training_window) 
+        messagebox.showinfo('Training Completed Succesfully!', f'Training results can be found in folder:\n{results_folder.parents[0]}', parent=self.train_window.training_window)
     
     def reset_training(self):
         '''Dedicated reset method for the training cycle, necessary to allow for cycling and retraining'''
