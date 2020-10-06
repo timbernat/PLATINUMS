@@ -1,240 +1,269 @@
-import csv, json, re
-from collections import Counter
+import csv, json, math, random, re
 import numpy as np
 
 from iumsutils import *
 
-# Methods to convert to and from jsons and csvs
-def jsonize(source_file_name): 
+# methods for csvs
+def jsonize(file_name): 
     '''Process spectral data csvs, generating labels, vector mappings, species counts, and other information,
     then cast the data to a json for ease of data reading in other applications and methods'''
-    with open(f'{source_file_name}.csv', 'r') as csv_file:
-        data_dict = {row[0] : [float(i) for i in row[1:]] for row in csv.reader(csv_file)} # pull out a dict of instance : spectrum pairs to circumvent using up the reader generator
+    with open(f'{file_name}.csv', 'r') as csv_file:
+        temp_dict = {row[0] : [float(i) for i in row[1:]] for row in csv.reader(csv_file)} # pull out a dict of name : spectrum pairs to circumvent using up the reader generator
         
-    for spectrum in data_dict.values():
+    for spectrum in temp_dict.values():
         try: 
             if len(spectrum) != spectrum_size: # throw an error if any of the spectra are a different size than the others
                 raise ValueError('Spectra must all be of the same length')
         except NameError: # take spectrum_size to be the length of the first spectrum encountered (in that case, spectrum_size is as yet unassigned)
             spectrum_size = len(spectrum)
     
-    species = sorted(set(isolate_species(instance) for instance in data_dict.keys()))   # sorted list of one of each species
-    species_count = Counter(isolate_species(instance) for instance in data_dict.keys()) # dict of the number of each species
+    species, species_count = ordered_and_counted(isolate_species(instance) for instance in temp_dict.keys())
+    families, family_count = ordered_and_counted(get_family(instance) for instance in temp_dict.keys())      
+    family_mapping = one_hot_mapping(families)  # dict of onehot mapping vectors by family   
+    chem_data = [(name, isolate_species(name), get_family(name), spectrum, family_mapping[get_family(name)]) for name, spectrum in temp_dict.items()] 
     
-    families = sorted(set(get_family(instance) for instance in data_dict.keys()))       # sorted list of one of each family
-    family_count = Counter(get_family(instance) for instance in data_dict.keys())       # dict of the number of each family
-    family_mapping = {family : tuple(int(i == family) for i in families) for family in families}  # dict of onehot mapping vectors by family
-    
-    chem_data = {}
-    for instance, spectrum in data_dict.items():
-        curr_species = isolate_species(instance)
-        if curr_species not in chem_data:
-            chem_data[curr_species] = {}
-        chem_data[curr_species][instance] = (spectrum, family_mapping[get_family(instance)])
-        
     packaged_data = {   # package all the data into a single dict for json dumping
         'chem_data' : chem_data,
-        'species' : species,
-        'families' : families,
+        'species'   : species,
+        'families'  : families,
         'family_mapping' : family_mapping,
-        'spectrum_size' : spectrum_size,
-        'species_count' : species_count,
-        'family_count' : family_count
+        'spectrum_size'  : spectrum_size,
+        'species_count'  : species_count,
+        'family_count'   : family_count
     }
-    with open(f'{source_file_name}.json', 'w') as json_file:
+    with open(f'{file_name}.json', 'w') as json_file:
         json.dump(packaged_data, json_file) # dump our data into a json file with the same name as the original datacsv
         
-def csvize(source_file_name):
-    '''Inverse of jsonize, takes a processed chemical data json file and reduces it to a csv with just the listed spectra'''
-    with open(f'{source_file_name}.json', 'r') as source_file, open(f'{source_file_name}.csv', 'w', newline='') as dest_file:
-        json_data = json.load(source_file)
-        for species, instances in json_data['chem_data'].items():
-            for instance, data in instances.items():
-                row = [instance, *data[0]] # include only the spectrum (not the vector) after the name in the row
-                csv.writer(dest_file).writerow(row)
+def correct_csv_names(file_name):
+    '''Used to ensure greater consistency in naming between datasets, replaces flagged names with the standardized version
+    Has internal dict pairing match species to the correct version of their name (expand as more edge cases come up)'''
+    rep_flags = {'MIBK' : 'Methyl-iBu-Ketone', # add flags as they come up, these are the ones for Modes 1-3 I've come across so far
+                'Propanol' : '1-Propanol', 
+                'Butanol'  : '1-Butanol',
+                'Pentanol' : '1-Pentanol',
+                'Hexanol'  : '1-Hexanol',
+                'Heptanol' : '1-Heptanol',
+                'Octanol'  : '1-Octanol',
+                'IsoButanol'  : 'Isobutanol',
+                'Iso-Butanol' : 'Isobutanol',
+                'Sec Butyl Acetate' : 'Sec-Butyl Acetate',
+                'Secbutyl Acetate'  : 'Sec-Butyl Acetate'}
+    with open(f'{file_name}.csv', 'r') as csv_in, open(f'{file_name}(@).csv', 'w', newline='') as csv_out: # use "@" as an indicator
+        for row in csv.reader(csv_in):
+            if isolate_species(row[0]) in rep_flags: # perform a regex sub if the species is within the flagged keys
+                row[0] = re.sub(f'\A{isolate_species(row[0])}', rep_flags[isolate_species(row[0])], row[0]) # ensure string occurs at beginning (to avoid "2-1-Propanol" bug)
+            csv.writer(csv_out).writerow(row)
 
-            
-# data transformation methods - note that these only work with jsons for simplicity, if you want a csv, then use csvize after the transformation
-def base_transform(file_name, operation=lambda x : x, discriminator=None, indicator='', **opargs):
-    '''The base method for transforming data, takes target file (always a .json) and a function to operate on each spectrum in the file.
-    Optionally, a boolean-valued function over spectra can be passed as a discriminator to set criteria for removal of spectra in the transform'''
-    source_file_name, dest_file_name = f'{file_name}.json', f'{file_name}{indicator}.json' 
-    with open(source_file_name, 'r') as source_file, open(dest_file_name, 'w', newline='') as dest_file:
+# methods for jsons
+def load_chem_json(file_name):
+    '''Read a chemical data json, de-serializes the Instance objects from "chem_data", and return the contents of the file.
+    saves repetition of reading code throughout this library'''
+    with open(f'{file_name}.json', 'r') as source_file:
         json_data = json.load(source_file) # this comment is a watermark - 2020, timotej bernat
+        json_data['chem_data'] = [Instance(*properties) for properties in json_data['chem_data']] # unpack the properties into Instance objects
+    return json_data
            
-        temp_dict = {} # temporary dictionary is used to allow for deletion of chemdata entries (can't delete while iterating, can't get length in dict comprehension)
-        for species, instances in json_data['chem_data'].items():
-            if species not in temp_dict:
-                temp_dict[species] = {} # ensure entries for each species exists in the new dict
-            for instance, (spectrum, vector) in instances.items():
-                if not discriminator or not discriminator(instance, spectrum):    # only perform the operation if no discriminator exists or if the discrimination criterion is unmet
-                    temp_dict[species][instance] = (operation(spectrum, **opargs), vector) # if no operation is passed, spectra will remain unchanged
-        json_data['chem_data'] = temp_dict                              
-        json_data['spectrum_size'] = len(operation(spectrum, **opargs)) # takes the length to be that of the last spectrum in the set; all spectra are
-        # guaranteed to be the same size by the jsonize method, so under a uniform transform, any change in spectrum size should also be uniform throughout
-        
-        if discriminator:  # only necessary to recount families, species, and instances if spectra are being removed
-            all_instances = [instance for instances in json_data['chem_data'].values() for instance in instances.keys()]
-            json_data['families'] = sorted( set(map(get_family, all_instances)) )
-            json_data['family_count'] = Counter( map(get_family, all_instances) )
-            
-            json_data['species'] = sorted( set(map(isolate_species, all_instances)) )
-            json_data['species_count'] = Counter( map(isolate_species, all_instances) )
+def csvize(file_name):
+    '''Inverse of jsonize, takes a processed chemical data json file and reduces it to a csv with just the listed spectra'''
+    json_data = load_chem_json(file_name) 
+    with open(f'{file_name}(C).csv', 'w', newline='') as dest_file:
+        for instance in json_data['chem_data']:
+            csv.writer(dest_file).writerow([instance.name, *instance.spectrum])
 
+# data transformation methods (for jsons only) - if you want a csv, then use csvize after the transformation
+# NOTE: actual transforms will always end in the suffiz "-ize", while any helper methods will not
+def base_transform(file_name, operator=None, discriminator=None, indicator='', **opargs):
+    '''The base method for transforming data, takes a .json data file name, an optional operator to modify spectra (takes spectra and optional arguments),
+    an optional discriminator to omit spectra if some condition is met (takes an Instance object and the full chem_data list as arguments), 
+    and an optional indicator to denote that a tranform has occurred. NOTE: tranformed data is written to a new file, ORIGINAL DATA IS READ ONLY'''
+    json_data = load_chem_json(file_name)
+    
+    temp_data = []
+    for instance in json_data['chem_data']:
+        if not (discriminator and discriminator(instance)): # omit instance only when there is a discriminator present AND its condition is met
+            if operator:
+                instance.spectrum = operator(instance.spectrum, **opargs) # operate on the spectrum if an operator is given
+            temp_data.append(instance)
+    
+    json_data['spectrum_size'] = len(instance.spectrum) # takes size to be that of the last spectrum (jsonize guarantees uniform length, so a uniform transformation shouldn't change that)
+    if discriminator:  # only when spectra are being omitted might it be necessary to recount species and families
+        json_data['species'], json_data['species_count'] = ordered_and_counted(instance.species for instance in temp_data)
+        json_data['families'], json_data['family_count'] = ordered_and_counted(instance.family for instance in temp_data)
+        
+        if json_data['family_mapping'].keys() != json_data['families']: # if the families present have changed, must redo the family mapping as well
+            json_data['family_mapping'] = one_hot_mapping(json_data['families']) # rebuild the family mapping
+            for instance in temp_data:
+                instance.vector = json_data['family_mapping'][instance.family] # all mapping vectors based on the new mapping
+            
+    json_data['chem_data'] = [list(instance.__dict__.values()) for instance in temp_data] # flatten and listify the Instance objects to prepare for JSON serialization
+    with open(f'{file_name}{indicator}.json', 'w') as dest_file: # this comment is a watermark - 2020, timotej bernat
         json.dump(json_data, dest_file) # dump the result in the new file
 
         
+# some basic tranform operations
+def duplicatize(file_name):
+    '''Makes a duplicate of a json dataset in the same directory'''
+    base_transform(file_name, indicator='(D)') # with no operator or discriminator, all items are copied verbatim
+    
+def trimize(file_name, cutoff):
+    '''Truncates all spectra above some cutoff'''
+    base_transform(file_name, operator=lambda spectrum : spectrum[:cutoff], indicator='(T)')
+          
 def filterize(file_name, cutoff=0.5): 
-    '''Most naive possible transform, removes all spectra whose maximum falls below the specified cutoff value (applied indiscriminately to all instances)'''
-    base_transform(file_name, discriminator=lambda instance, spectrum : max(spectrum) < cutoff, indicator='(S)')      
-        
+    '''Removes all spectra whose maximum falls below a specified cutoff value'''
+    base_transform(file_name, discriminator=lambda instance : max(instance.spectrum) < cutoff, indicator='(S)')      
 
-def ground_baseline(spectrum, lower_bound, upper_bound):
-    '''Takes a spectrum and two bounds, which outline a region of the spectrum where only noise (NO PEAKS!) is know to occur,
-    finds the average noise over this interval, and brings the baseline down to this average (near 0)'''
-    baseline_elev = average(spectrum[lower_bound:upper_bound])
-    return [point-baseline_elev for point in spectrum]
+def baseline_standardize(file_name, lower_bound=0, upper_bound=20, base_value=0):
+    '''Baseline standardizes a dataset. Takes a spectrum, two bounds, and a desired baseline value and uses the average noise in the region specified between the
+    two bounds to center the overall baseline around the desired value. NOTE: it is CRITICAL that the bounds denote a region containing ONLY NOISE (NO PEAKS!)''' 
+    base_transform(file_name, operator=lambda spectrum : [point - average(spectrum[lb:ub]) + base_value for point in spectrum],
+                   indicator=f'(B{base_value and base_value or ""})', lb=lower_bound, ub=upper_bound, base_value=base_value) # baseline, if not zero, will be indicated in name
 
-def baseline_normalize(file_name, lower_bound=0, upper_bound=20):
-    '''Baseline normalizes an entire dataset'''
-    base_transform(file_name, operation=ground_baseline, indicator='(B)', lower_bound=lower_bound, upper_bound=upper_bound)
+def fourierize(file_name):
+    '''Replaces spectra in a set with their Fourier Tranforms (Hermitian and real-valued)'''
+    if '(FT)' in file_name:
+        raise TypeError('File has already been Fourierized')   
+    base_transform(file_name, operator=lambda spectrum : list(np.fft.hfft(spectrum)), indicator='(FT)') # transform is converted to list (np arrays are not JSON serializable)
+
     
-        
-def fft_with_smoothing(spectrum, harmonic_cutoff=None, smooth_only=False):                                                      
-    '''Performs a fast Fourier Transform over a spectrum; can optionally cut off higher frequencies, as well as
-    converting the truncated frequency space into a (now noise-reduced) spectrum using the inverse transform'''
+#transforms that require helper methods, usually to gain extra info from the whole dataset
+def fourier_smoothing(spectrum, cutoff_frequency):                                                      
+    '''Performs an FFT (RV), sets all frequencies above the cutoff to 0, and performs an IFFT on the truncated frequency domain, with the intent of reducing high-frequency noise'''
     fft_spectrum = np.fft.hfft(spectrum)  # perform a Hermitian (real-valued) fast Fourier transform over the data
-    if harmonic_cutoff:
-        blanks = np.zeros(np.size(fft_spectrum)-harmonic_cutoff) # make everything beyond the harmonic cut-off point zeros
-        fft_spectrum = np.concatenate( (fft_spectrum[:harmonic_cutoff], blanks) )
-    if smooth_only:
-        fft_spectrum = np.fft.ihfft(fft_spectrum).real # keep only real part of inverse transform (imag part is 0 everywhere, but is kept complex type for some reason)
-    return list(fft_spectrum)
+    fft_spectrum[cutoff_frequency:] = 0   # set everything above the cutoff to 0 to preserve spectrum size upon inverse tranform
+    return list(np.fft.ihfft(fft_spectrum).real) # return only real part of inverse transform (imag part is all 0 anyways), wrap as list for json serialization
     
-def fourierize(file_name, harmonic_cutoff=None, smooth_only=False):  
-    '''Creates a copy of a PLATIN-UMS-compatible data file, with all spectra being replaced by their Discrete Fourier Transforms'''
-    base_transform(file_name, operation=fft_with_smoothing, indicator=f'(FT{smooth_only and "S" or ""})', harmonic_cutoff=harmonic_cutoff, smooth_only=smooth_only)
+def fourier_filterize(file_name, cutoff_frequency):  
+    '''Reduces high-frequency noise in a dataset'''
+    base_transform(file_name, operator=fourier_smoothing, indicator='(FTF)', cutoff_frequency=cutoff_frequency)
 
     
-def get_RIP(mode1_spectrum):
-    '''Naive but surprisingly effective method for identifying the RIP value for Mode 1 spectra'''
-    return max(mode1_spectrum[:len(mode1_spectrum)//2]) # takes the RIP to be the maximum value in the first half of the spectrum
-        
-def get_RIP_cutoffs(file_name, lower_limit=0.15, upper_limit=0.95): 
-    '''Helper method for filtering Mode 1 data specifically. Takes a json file and normalized lower and upper limits (from 0 to 1)
-    and returns a dict (by species) of the lower and upper RIP cutoff values corresponding to these limits'''
-    if 'Mode 1' not in file_name: # ensure this is not applied to data for which it is not compatible
-        raise TypeError('File is not a Mode 1 dataset')
-        
-    if lower_limit > 1 or upper_limit > 1 or lower_limit > upper_limit: # ensure limits passed actually make sense
-        raise ValueError('Limit(s) exceed 1 or are mismatched')
+def get_RIP_cutoffs(file_name, lb=0.15, ub=0.95):
+    '''Takes a dataset and normalized cutoff bounds and returns the RIP values, for each species, which correspond to those bounds'''  
+    json_data = load_chem_json(file_name)
     
-    with open(f'{file_name}.json', 'r') as file:
-        json_data = json.load(file)
+    RIP_cutoffs = {}
+    for species in json_data['species']:
+        RIPs = sorted(get_RIP(instance.spectrum) for instance in json_data['chem_data'] if instance.species == species)
+        lower_cutoff, *middle, upper_cutoff = [val for val, norm_val in zip(RIPs, normalized(RIPs)) if lb < norm_val < ub]
+        RIP_cutoffs[species] = (lower_cutoff, upper_cutoff)        
+    return RIP_cutoffs
 
-    # largest value in the first half of the spectrum is taken to be the RIP
-    RIP_ranges = {species : sorted(get_RIP(spectrum) for (spectrum, vector) in instances.values()) # order and normalize all RIP values of a given species species
-                                                     for species, instances in json_data['chem_data'].items()}   # do this for all species in the data
-    for species, RIP_list in RIP_ranges.items():
-        lower_cutoff, *middle, upper_cutoff = [val for i, val in enumerate(RIP_list) if lower_limit < normalized(RIP_list)[i] < upper_limit] 
-        # return ORIGINAL values if normalized values are within the cutoff range (hence the indexing)
-        RIP_ranges[species] = (lower_cutoff, upper_cutoff) # throw out the midpoints within the range and only return the endpoints as cutoffs
-    
-    return RIP_ranges  
-
-def filterize_mode1(file_name, lower_limit=0.15, upper_limit=0.95, species_cap=80):
+def filterize_mode1(file_name, lower_bound=0.15, upper_bound=0.95):
     '''Filtering regime specific to Mode 1, will not work with other Modes, and Mode 1 sets should not be used with other filtering regimes.
     Culls all spectra whose RIP lies outside of some prescribed normalized bounds for the RIP for that particular species'''
-    RIP_cutoffs = get_RIP_cutoffs(file_name, lower_limit=lower_limit, upper_limit=upper_limit)
-    
-    def discriminator(instance, spectrum):
-        '''Discriminator function for this regime, necessary to define this as a function-in-a-function, as the parameters
-        will change depending on the limits passed, opted for def rather than lambda for readability'''
-        lower_cutoff, upper_cutoff = RIP_cutoffs[isolate_species(instance)] # find the correct cutoffs by species for the current instance
-        return not (lower_cutoff < get_RIP(spectrum) < upper_cutoff) # flag if RIP is not within these cutoffs
-    
-    base_transform(file_name, discriminator=discriminator, indicator='(S1)')
+    if 'Mode 1' not in file_name: # ensure this transform is not applied to data for which it is not compatible
+        raise TypeError('File is not a Mode 1 dataset')
+        
+    if not (0 < lower_bound < 1) or not (0 < upper_bound < 1): # some error checking to ensure that the imposed limits make sense
+        raise ValueError('Limit(s) should be between 0 and 1')
+    elif lower_bound > upper_bound:
+        raise ValueError('Limits are mismatched')
+        
+    limits = get_RIP_cutoffs(file_name, lb=lower_bound, ub=upper_bound) # the dictionary of the RIP cutoffs by species
+    base_transform(file_name, discriminator=lambda instance : not (limits[instance.species][0] < get_RIP(instance.spectrum) < limits[instance.species][1]), indicator='(S1)')
     
 
+def get_reduction_listing(file_name, lower_cap=60, upper_cap=80):
+    '''Within a chemical data file, if the number of instances of a given species exceed the upper_cap, the number of instances to be kept will be randomly selected
+    within a range from the upper to the lower cap, and that number of instances will be randomly selected to be kept. Returns a list of all the instances (by name) to keep'''
+    json_data = load_chem_json(file_name)
+    
+    kept_count = {species : (count < upper_cap and count or random.randint(lower_cap, upper_cap)) for species, count in json_data['species_count'].items()}
+    random.shuffle(json_data['chem_data'])
+    
+    kept_listing = []
+    for instance in json_data['chem_data']:
+        if kept_count[instance.species] > 0:
+            kept_listing.append(instance.name)
+            kept_count[instance.species] -= 1   
+    return kept_listing
+
+def reductize(file_name, lower_cap=60, upper_cap=80):
+    '''Reduces a dataset such that no species has more than the "upper_cap" amount of instances, in a doubly-random and bias-free way'''
+    instances_to_keep = get_reduction_listing(file_name, lower_cap=lower_cap, upper_cap=upper_cap)
+    base_transform(file_name, discriminator=lambda instance : instance.name not in instances_to_keep, indicator='(R)')
+
+    
+fold = lambda chem_data, funct, **kwargs : funct((funct(instance.spectrum, **kwargs) for instance in chem_data), **kwargs) # useful for finding single smallest point in a dataset, for example
+    
+def logarithmize(file_name):
+    '''Finds the absolute minimum point of a baseline-standardized dataset, makes this the new baseline (to ensure all points are positive and avoid a log domain error)
+    and takes the natural log over all spectra (exaggerates relative differences even further)'''
+    if '(B' not in file_name: # consider using regex for this check (numerical value in baseline indicator is variable)
+        raise TypeError('Transform must be performed over baseline-standardized data')       
+    chem_data = load_chem_json(file_name)['chem_data']    
+    eps_baseline = -fold(chem_data, min) + np.finfo(float).eps # the minimum non-biased/equitable baseline that guarantees all data are positive 
+    
+    base_transform(file_name, operator=lambda spectrum : [math.log(point + eps_baseline) for point in spectrum], indicator='(L)')
+    
+    
 # analysis and data characterization methods---------------------------------------------------------------------------------------------------------------------------
 def analyze_spectra(file_name, species, ncols=6, save_dir=None):
     '''Plot the spectra of all instances of one species in the chosen dataset'''
-    with open(f'{file_name}.json') as json_file:
-        json_data = json.load(json_file)
-
+    json_data = load_chem_json(file_name)
     if species not in json_data['species']:
         raise ValueError(f'Species "{species}" not in dataset')
         
-    plot_list = [ ((range(len(spectrum)), spectrum), instance, 's') for instance, (spectrum, vector) in json_data['chem_data'][species].items()]
-    adagraph(plot_list, ncols=ncols, save_dir=save_dir)
+    plots = [BundledPlot(data=instance.spectrum, title=instance.name, plot_type='s')
+             for instance in json_data['chem_data'] if instance.species == species]
+    adagraph(plots, ncols=ncols, save_dir=save_dir)
 
-def analyze_noise(file_name, ncols=4):  # consider making min/avg/max calculations in-place, rather than after reading
+def analyze_noise(file_name, ncols=4, save_folder='Dataset Noise Plots'):  # consider making min/avg/max calculations in-place, rather than after reading
     '''Generate a set of plots for all species in a dataset which shows how the baseline noise varies across spectra at each sample point'''
-    with open(f'{file_name}.json', 'r') as source_file:
-        chem_data = json.load(source_file)['chem_data']
-        data_by_species = {species : [spectrum for (spectrum, vector) in instances.values()] 
-                                for species, instances in chem_data.items()}
+    json_data = load_chem_json(file_name)
     
-    noise_plots = []
-    for species, spectra in data_by_species.items():
-        noise_stats = [tuple(map(funct, zip(*spectra))) for funct in (min, average, max)] # tuple containing the min, avg, and max values across all points in all current species' spectra
-        plot_title = f'S.V. of {species}, ({len(spectra)} instances)'
-        noise_plots.append((noise_stats, plot_title, 'v'))  # bundled plot for the current species
-    adagraph(noise_plots, ncols, f'./Dataset Noise Plots/Spectral Variation by Species, {file_name}')
+    plots = []
+    for species in json_data['species']:
+        species_title = f'SV of {species}, ({json_data["species_count"][species]} instances)' # DOUBLE QUOTES ARE DELIBERATE, DON'T CHANGE!
+        species_data = [instance.spectrum for instance in json_data['chem_data'] if instance.species == species]
+        species_data = [tuple(map(funct, zip(*species_data))) for funct in (min, average, max)] # transpose data and calculate pointwise minima, averages, and maxima 
+        plots.append(BundledPlot(data=species_data, title=species_title, plot_type='v'))
+        
+    adagraph(plots, ncols, f'./{save_folder}/{file_name} - SV by Species')
     
-def analyze_fsmoothing_single(file_name, instance, cutoff=30, save_plot=False):
+def analyze_fsmoothing(file_name, inst, initial_cutoff, nsteps=1, step_size=1, save_figure=False):
     '''Investigate the original spectrum, Fourier Spectrum, truncated Fourier Spectrum, and reconstructed truncated spectrum of a
     single instance in the specified dataset. Optionally, can save the figure to the current directory, if it is of interest'''
-    with open(f'{file_name}.json', 'r') as json_file:
-        orig_data = json.load(json_file)['chem_data'][isolate_species(instance)][instance][0] # original spectrum
-    
-    fft_data = np.fft.hfft(orig_data)
-    cut_fft_data = np.concatenate( (fft_data[:cutoff], np.zeros(np.size(fft_data)-cutoff)) )  
-    rec_data = np.fft.ihfft(cut_fft_data).real
-    
-    plots = (orig_data, fft_data, cut_fft_data, rec_data)
-    plot_names = ('Original Spectrum', 'FFT Spectrum', f'FFT Spectrum (to point {cutoff})', f'Reconstructed Spectrum (to point {cutoff})')
-    plot_list = [ ((range(len(data)), data), name, 's') for data, name in zip(plots, plot_names)]
-    
-    save_dir = (save_plot and f'Fourier Smoothing of {instance} (to point {cutoff})' or None)
-    adagraph(plot_list, ncols=4, save_dir=save_dir)
-
-def analyze_fsmoothing_range(file_name, instance, step_size, save_figure=False, ncols=5, lower_fbound=0):
-    '''Investigate the Fourier-smoothed spectra for a given instance over a range of harmonic cutoff points'''
     if 'FT' in file_name:
-        raise TypeError('Method only applies to non-Fourier Transformed data')
+        raise TypeError('Method only applies to non-Fourier Transformed data') 
+   
+    json_data = load_chem_json(file_name)
+    for instance in json_data['chem_data']:
+        if instance.name == inst:
+            orig_data = instance.spectrum
+            fft_data = np.fft.hfft(orig_data)
+            break
+    else:
+        raise ValueError(f'Instance "{inst}" not in dataset')
     
-    plot_list = []
-    with open(f'{file_name}.json', 'r') as json_file:
-        json_data = json.load(json_file)
+    max_cutoff = initial_cutoff + nsteps*step_size 
+    if max_cutoff > fft_data.size:
+        raise ValueError('The resulting amount of cutoffs exceeds the FFT data size')
     
-    x_range = range(json_data['spectrum_size'])
-    orig_data = json_data['chem_data'][isolate_species(instance)][instance][0]
-    plot_list.append( ((x_range, orig_data), f'Original Spectrum ({instance})', 's') )
-    
-    fft_data = np.fft.hfft(orig_data)[lower_fbound:]
-    for cutoff in range(step_size, fft_data.size, step_size):
-        cut_fft_data = np.concatenate( (fft_data[:cutoff], np.zeros(np.size(fft_data)-cutoff)) ) 
-        rec_data = tuple(np.fft.ihfft(cut_fft_data).real)
-        plot_list.append( ((x_range[lower_fbound:], rec_data), f'Reconstructed Spectrum  (to freq. {cutoff})', 's') )
-    plot_list.append( ((x_range[lower_fbound:], np.fft.ihfft(fft_data).real), 'Fully Reconstructed Spectrum', 's') )
-    
-    save_dir = (save_figure and f'Incremented FTSmoothing of {instance}' or None)
-    adagraph(plot_list, ncols=ncols, save_dir=save_dir)
-    
+    plots = [BundledPlot(data=orig_data, title='Original Spectrum')]
+    for cutoff in range(initial_cutoff, max_cutoff, step_size):
+        cut_fft_data = np.fft.hfft(orig_data)
+        cut_fft_data[cutoff:] = 0 
+        plots.append(BundledPlot(data=np.fft.ihfft(cut_fft_data).real, title=f'Reconstructed Spectrum  (to freq. {cutoff})'))
+
+    if nsteps == 1:
+        plots.insert(1, BundledPlot(data=fft_data, title='FFT Spectrum'))
+        plots.insert(2, BundledPlot(data=cut_fft_data, title=f'FFT Spectrum (to freq. {cutoff})'))
+    else:
+        plots.append(BundledPlot(data=np.fft.ihfft(fft_data).real, title='Fully Reconstructed Spectrum'))
+ 
+    save_dir = (save_figure and f'{cutoff and "Singular" or "Ranged"} Fourier Smoothing of {inst}' or None)
+    adagraph(plots, ncols=4, save_dir=save_dir)
+
 def analyze_fourier_maxima(file_name, save_figure=False):
     '''Plot all Fourier maxima (e.g. the baseline magnitudes) by family, in the order the families appear in the data'''
     if '(FT)' not in file_name:
         raise ValueError('Method only applies to Fourier-Transformed datasets')
     
-    with open(f'{file_name}.json', 'r') as json_file:
-        json_data = json.load(json_file)
-     
-    max_dict = {family : [max(spectrum) for species, instances in json_data['chem_data'].items() 
-                                          for (spectrum, vector) in instances.values()
-                                             if get_family(species) == family]
-                    for family in json_data['families']}     
-    plot_list = [ ((range(len(maxima)), maxima), family, 's') for family, maxima in max_dict.items() ]
+    json_data = load_chem_json(file_name)
+    plots = [BundledPlot(data=[max(instance.spectrum) for instance in json_data['chem_data'] if instance.family == family], title=family)
+                                                       for family in json_data['families']]     
     
     save_dir = (save_figure and f'Fourier Maxima by Family, {file_name}' or None)
-    adagraph(plot_list, ncols=5, save_dir=save_dir)
+    adagraph(plots, ncols=5, save_dir=save_dir)
