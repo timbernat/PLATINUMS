@@ -1,5 +1,5 @@
 # Custom Imports
-import iumsutils           # library of functions specific to my "-IUMS" class of IMS Neural Network applications
+import iumsutils           # library of functions specific to my "-IUMS" class of MS Neural Network applications
 import TimTkLib as ttl     # library of custom tkinter widgets I've written to make GUI assembly more straightforward 
 
 # Built-in Imports
@@ -38,6 +38,7 @@ class TkEpochs(Callback):
     def on_epoch_end(self, epoch, logs=None):  # abort training if the abort flag has been raised by the training window
         if self.tw.end_training:
             self.model.stop_training = True
+            self.tw.set_status('Training Aborted')
         
 class TrainingWindow(): 
     '''The window which displays training progress, was easier to subclass outside of the main GUI class'''
@@ -63,9 +64,9 @@ class TrainingWindow():
         self.fam_label      = tk.Label(self.status_frame, text='Evaluation Type: ')
         self.curr_fam       = tk.Label(self.status_frame)
         self.round_label    = tk.Label(self.status_frame, text='Evaluation Round: ')
-        self.round_progress = ttl.NumberedProgBar(self.status_frame, total=total_rounds, row=3, col=1)
+        self.round_progress = ttl.NumberedProgBar(self.status_frame, maximum=total_rounds, row=3, col=1)
         self.epoch_label    = tk.Label(self.status_frame, text='Training Epoch: ')
-        self.epoch_progress = ttl.NumberedProgBar(self.status_frame, total=num_epochs, style_num=2, row=4, col=1) 
+        self.epoch_progress = ttl.NumberedProgBar(self.status_frame, maximum=num_epochs, style_num=2, row=4, col=1) 
         self.status_label   = tk.Label(self.status_frame, text='Current Status: ')
         self.curr_status    = tk.Label(self.status_frame)
         
@@ -156,7 +157,7 @@ class PLATINUMS_App:
     def __init__(self, main):       
         #Main Window
         self.main = main
-        self.main.title('PLATIN-UMS 4.6.5-alpha')
+        self.main.title('PLATIN-UMS 4.7.2-alpha')
         self.main.geometry('445x503')
         self.parameters = {}
 
@@ -172,9 +173,9 @@ class PLATINUMS_App:
         
         
         # Frame 0
-        self.input_frame    = ttl.ToggleFrame(self.main, text='Select Parameter Input Method: ', padx=4)
+        self.input_frame = ttl.ToggleFrame(self.main, text='Select Parameter Input Method: ', padx=4)
         
-        self.input_mode     = tk.StringVar()     
+        self.input_mode = tk.StringVar()     
         for i, mode in enumerate(('Manual Input', 'Preset from File')): # build selection type buttons sequentially, don't need to reference these w/in the class after building
             tk.Radiobutton(self.input_frame, text=mode, value=mode, padx=9, var=self.input_mode).grid(row=0, column=i)
         self.confirm_inputs = ttl.ConfirmButton(self.input_frame, command=self.confirm_input_mode, padx=4, row=0, col=2)
@@ -185,8 +186,12 @@ class PLATINUMS_App:
         self.chosen_file = tk.StringVar()
         self.chem_data, self.species, self.families, self.family_mapping, self.spectrum_size = [], [], [], {}, 0
         
+        data_path = Path('TDMS Datasets') # ensure a datasets folder exists, so that app does not fail on __init__
+        if not data_path.exists():
+            data_path.mkdir()
+            
         self.json_menu      = ttl.DynOptionMenu(self.file_frame, var=self.chosen_file, option_method=iumsutils.get_by_filetype,
-                                                opargs=('.json',), default='--Choose a JSON--', width=32, colspan=2)
+                                                opargs=('.json', data_path), default='--Choose a JSON--', width=32, colspan=2)
         self.read_label     = tk.Label(self.file_frame, text='Read Status:')
         self.read_status    = ttl.StatusBox(self.file_frame, on_message='JSON Read!', off_message='No File Read', width=22, row=1, col=1)
         self.refresh_button = tk.Button(self.file_frame, text='Refresh JSONs', command=self.json_menu.update, padx=15)
@@ -237,11 +242,10 @@ class PLATINUMS_App:
 
         
         # Frame 5 - contains only the button used to trigger a main action  
-        self.summaries    = {} # have not absorbed this into self.parameters, since summaries should not be oart of presets
-        
         self.activation_frame = ttl.ToggleFrame(self.main, text='', padx=0, pady=0, row=5)   
         self.train_button = tk.Button(self.activation_frame, text='TRAIN', padx=22, width=44, bg='deepskyblue2', state='disabled', command=self.training)
         self.train_button.grid(row=0, column=0)
+        self.species_summaries = []
         
         self.pred_button = tk.Button(self.activation_frame, text='PREDICT', padx=22, width=44, bg='mediumorchid2', state='disabled', command=lambda:None)
         self.pred_button.grid(row=0, column=0)
@@ -249,7 +253,7 @@ class PLATINUMS_App:
         
         
         # Packaging together some widgets and attributes, for ease of reference (also useful for self.reset() and self.isolate() methods)
-        self.arrays   = (self.parameters, self.chem_data, self.species, self.families, self.family_mapping, self.summaries) 
+        self.arrays   = (self.parameters, self.chem_data, self.species, self.families, self.family_mapping, self.species_summaries) 
         self.frames   = (self.input_frame, self.file_frame, self.selection_frame, self.hyperparam_frame, self.param_frame, self.activation_frame)
         self.switches = (self.fam_switch, self.save_switch, self.stop_switch, self.trim_switch)
         self.entries  = (self.epoch_entry, self.batchsize_entry, self.learnrate_entry, self.n_slice_entry, self.upper_bound_entry, self.slice_decrement_entry, self.lower_bound_entry)
@@ -258,6 +262,11 @@ class PLATINUMS_App:
         self.reset() # isolate the first frame by default
         
     #General Methods
+    def lift(self):
+        '''Bring GUI window to front of tabs'''
+        self.main.attributes('-topmost', True)
+        self.main.attributes('-topmost', False)
+    
     def isolate(self, on_frame):
         '''Enable just one frame.'''
         for frame in self.frames:
@@ -294,7 +303,7 @@ class PLATINUMS_App:
         for twidget in self.resetable_twidgets: # Tim Widgets, or just twidgets for short :)
             twidget.reset_default()
         
-        self.main.lift() # bring main window to forefront
+        self.lift() # bring main window to forefront
 
         
     # Frame 0 (Parameter Input) Methods   
@@ -423,25 +432,25 @@ class PLATINUMS_App:
         self.parameters['early_stopping'] = self.stop_switch.value
         
         self.parameters['trim_spectra']    = self.trim_switch.value        
-        self.parameters['trimming_max']    = trimming_max = self.upper_bound_entry.get_value()
-        self.parameters['slice_decrement'] = slice_decrement = self.slice_decrement_entry.get_value()
-        self.parameters['trimming_min']    = trimming_min = self.lower_bound_entry.get_value()
-        self.parameters['num_slices']      = num_slices = self.n_slice_entry.get_value()
+        self.parameters['trimming_max']    = self.upper_bound_entry.get_value()
+        self.parameters['slice_decrement'] = self.slice_decrement_entry.get_value()
+        self.parameters['trimming_min']    = self.lower_bound_entry.get_value()
+        self.parameters['num_slices']      = self.n_slice_entry.get_value()
         
         if self.trim_switch.value: # only perform error checks if trimming is enabled 
             self.check_trimming_bounds()
             
-        self.param_frame.disable()
         self.isolate(self.activation_frame) # make the training button clickable
         
     def confirm_tparams_and_preset(self):
         '''Confirm training parameters in manual mode, as well as saving the configured training preset to the central preset folder'''
         self.confirm_tparams()
         preset_path = Path(filedialog.asksaveasfilename(title='Save Preset to file', initialdir='./Training Presets', defaultextension='.json', filetypes=[('JSONs', '*.json')] ))
-        if preset_path: # if operation has not been cancelled by the user
+        try: 
             with open(preset_path, 'w') as preset_file:
                 json.dump(self.parameters, preset_file)
-        
+        except PermissionError: # catch the case in which the user cancels the preset saving
+            self.isolate(self.param_frame) # re-enable the frame and allow the user to try again
         
     # Section 2A: the training routine itself, along with a dedicated reset method to avoid overwrites between subsequent trainings
     def training(self, num_spectra=2, test_set_proportion=0.2, verbosity=False):
@@ -453,6 +462,7 @@ class PLATINUMS_App:
         num_epochs      = self.parameters['num_epochs'] 
         batchsize       = self.parameters['batchsize']
         learnrate       = self.parameters['learnrate'] 
+        
         trimming_max    = self.parameters['trimming_max'] 
         slice_decrement = self.parameters['slice_decrement'] 
         trimming_min    = self.parameters['trimming_min'] 
@@ -462,8 +472,9 @@ class PLATINUMS_App:
         fam_training    = self.parameters['fam_training']
         trim_spectra    = self.parameters['trim_spectra']
         save_weights    = self.parameters['save_weights']
-        early_stopping  = self.parameters['early_stopping']
+        early_stopping  = self.parameters['early_stopping']      
         
+        iumsutils.SpeciesSummary.family_mapping = self.family_mapping # MUST assign the current mapping to the species summary class
         total_rounds = len(selections) # determining the total number of training rounds which will be performed
         if trim_spectra:
             total_rounds *= (1 + num_slices)
@@ -476,9 +487,10 @@ class PLATINUMS_App:
         
         keras_callbacks = [TkEpochs(train_window)] # in every case, add the tkinter-keras interface callback to the callbacks list
         if early_stopping:
-            keras_callbacks.append(EarlyStopping(monitor='loss', mode='min', verbose=1, patience=16)) # add early stopping callback if called for
+            early_stopping_callback = EarlyStopping(monitor='loss', mode='min', verbose=0, patience=16, restore_best_weights=True) # fine-tune patience, eventually
+            keras_callbacks.append(early_stopping_callback) # add early stopping callback if called for
         
-        # FILE MANAGEMENT, TO ENSURE TO ENSURE SMOOTHNESS WHEN SAVING RESULTS LATER
+        # FILE MANAGEMENT AND OVERWRITE CHECKS, ENSURES NO DATA GETS ACCIDENTALLY OVERWRITTEN AND TAKEN BURDEN OF ORGANIZATION OFF OF THE USER
         train_window.set_status('Creating Folders...') 
         results_folder = Path('Saved Training Results', f'{data_file_name} Results') # main folder with all results for a particular data file
         
@@ -513,35 +525,43 @@ class PLATINUMS_App:
             train_window.button_frame.enable()
             return
         
-        # ACTUAL TRAINING CYCLE BEGINS
+        # OUTERMOST TRAINING LOOP, REGULATES CYCLING BETWEEN FAMILIARS AND UNFAMILIARS
         for familiar_cycling in range(1 + int(self.cycle_fams.get())):  # for now, it is required that this is a "get()" due to toggling    
-            # SOME PRE-TRAINING HOUSEKEEPING
-            start_time = time()    # log start of runtime, will re-log if cycling is enabled  
-            self.summaries.clear() # each cycle, ensure that any previous summaries do not bleed over into the current training results
+            start_time = time()    # log start time of each cycle, so that training duration can be computed afterwards  
             if familiar_cycling:
                 fam_training = not fam_training # invert familiar state upon cycling (only locally, though, not in the parameters or preset)
                 self.fam_switch.toggle()  # toggle the unfamiliar status the second time through (only occurs if cycling is enabled)
             
             fam_str = f'{fam_training and "F" or "Unf"}amiliar'  # some str formatting based on whether the current training type is familiar or unfamiliar
             train_window.set_familiar_status(fam_str)
-            curr_fam_folder = parent_folder/fam_str # folder with the results from the current familiar training, parent for all that follow
             
-            # INNER LAYERS OF TRAINING LOOP (WHERE ACTUAL DATA MANIPULATION AND TRAINING OCCUR)
-            for segment in range(1 + (trim_spectra and num_slices or 0)): # by default only train once with the full spectrum. If trimming is enabled...
-                for evaluand_idx, evaluand in enumerate(selections):      ## ...then train an extra <number of slices> times (DON"T DO ARITHMETICALLY!)         
-                # INITIALIZATION OF EACH ROUND          
+            curr_fam_folder = parent_folder/fam_str # folder with the results from the current familiar training, parent for all that follow 
+            if not curr_fam_folder.exists(): # if the folder doesn't exists, make it
+                curr_fam_folder.mkdir() 
+                
+                log_file_path = curr_fam_folder/'Log File.txt'
+                log_file_path.touch()   # create the log file, not yet logging anything
+            
+            # iNTERMEDIARY TRAINING LOOP, REGULATES SLICING
+            for segment in range(1 + (trim_spectra and num_slices or 0)): # by default only train OVER full spectrum. If trimming is enabled, train an extra <number of slices> times
+                if segment == 0:  # first segment will always be over the full spectrum, regardless of trimming
+                    lower_bound, upper_bound = 0, self.spectrum_size
+                    point_range = 'Full Spectra'
+                else:
+                    lower_bound, upper_bound = trimming_min, trimming_max - slice_decrement*(segment - 1) # trimming segments start at segment == 1, hence the -1
+                    point_range = f'Points {lower_bound}-{upper_bound}'
+                train_window.set_slice(point_range)
+                
+                self.species_summaries.clear() # empty the summaries list with each slice
+                curr_slice_folder = curr_fam_folder/point_range
+                if not curr_slice_folder.exists():                                                           
+                    curr_slice_folder.mkdir(parents=True) # ensure the folder exists, obviously
+                
+                # INNERMOST TRAINING LOOP, CYCLES THROUGH ALL THE SELECTED EVALUANDS
+                for evaluand_idx, evaluand in enumerate(selections):                  
                     train_window.set_status('Training...')
+                    train_window.round_progress.increment() 
                     curr_family = iumsutils.get_family(evaluand)
-                    train_window.round_progress.increment() # increment round progress
-
-                    if segment == 0:  # first segment will always be over the full spectrum, regardless of trimming
-                        lower_bound, upper_bound = 0, self.spectrum_size
-                        point_range = 'Full Spectra'
-                    else:
-                        lower_bound, upper_bound = trimming_min, trimming_max - slice_decrement*(segment - 1) # trimming segments start at segment == 1, hence the -1
-                        point_range = f'Points {lower_bound}-{upper_bound}'
-                    train_window.set_slice(point_range)
-                    curr_slice_folder = curr_fam_folder/point_range # "we'll save that guy for later"
  
                     eval_data = [(instance.name, instance.spectrum[lower_bound:upper_bound]) for instance in self.chem_data if instance.species == evaluand]
                     eval_titles, eval_spectra = map(list, zip(*eval_data)) # unpack the instance names and spectra via zip, convert zip tuples to lists to allow for insertion
@@ -568,11 +588,15 @@ class PLATINUMS_App:
                                 print(f'{x.shape[0]} features & {y.shape[0]} labels in {group} set ({round(100*x.shape[0]/len(training_data), 2)}% of the data)')
 
                         # actual model training occurs here
-                        hist = model.fit(x_train, y_train, callbacks=keras_callbacks, verbose=verbosity and 2 or 0, 
-                                         epochs=num_epochs, batch_size=batchsize)
-                        test_loss, test_acc = model.evaluate(x_test, y_test, verbose=(verbosity and 2 or 0))  # keras' self evaluation of loss and accuracy metric
+                        verbose = (verbosity and 2 or 0) # translate the passed "verbosity" argument into Keras verbosity
+                        hist = model.fit(x_train, y_train, callbacks=keras_callbacks, verbose=verbose, epochs=num_epochs, batch_size=batchsize)
+                        test_loss, test_acc = model.evaluate(x_test, y_test, verbose=verbose)  # keras' self evaluation of loss and accuracy metric
                         
-                        if save_weights: # if saving is enabled, save the model to the current result directory
+                        if early_stopping and early_stopping_callback.stopped_epoch: # if early stopping has indeed been triggered:
+                            with open(log_file_path, 'a') as log_file: # if early stopping has occurred, log it
+                                log_file.write(f'{fam_training and fam_str or evaluand} training round stopped early at epoch {early_stopping_callback.stopped_epoch}\n')
+                        
+                        if save_weights and not train_window.end_training: # if saving is enabled, save the model to the current result directory
                             train_window.set_status('Saving Model...')
                             weights_folder = curr_slice_folder/f'{fam_training and fam_str or evaluand} Model Files'
                             model.save(str(weights_folder)) # path can only be str, for some reason
@@ -590,70 +614,33 @@ class PLATINUMS_App:
                             with open(weights_folder/f'Reproducability Preset ({point_range}).json', 'w') as weights_preset: 
                                 json.dump(local_preset, weights_preset) # add a preset just for the current                        
                     
-                    # PREDICTION OVER EVALUATION SET, EVALUATION OF PERFORMANCE                 
-                    targets, num_correct = [], 0   # produce prediction values using the model and determine the accuracy of these predictions
-                    predictions = list(model.predict(np.array(eval_spectra)))
-                    for prediction in predictions:
-                        target = prediction[self.family_mapping[curr_family].index(1)]
-                        targets.append(target)
-
-                        if max(prediction) == target:
-                            num_correct += 1
-                    targets.sort(reverse=True)
-
-                    # PACKAGING OF ALL PLOTS
+                    # ABORTION CHECK PRIOR TO WRITING FILES, WILL CEASE IF TRAINING IS ABORTED
+                    if train_window.end_training:  
+                        messagebox.showerror('Training has Stopped!', 'Training aborted by user;\nProceed from Progress Window', parent=train_window.training_window)
+                        train_window.button_frame.enable()
+                        return # without a return, aborting training only pauses one iteration of loop
+                    
+                    # PACKAGING OF EXTRANEOUS PLOTS
                     spectra_plots = [iumsutils.BundledPlot(data=spectrum, title=name, x_data=range(lower_bound, upper_bound)) for name, spectrum in eval_data[:num_spectra]]
                     loss_plot     = iumsutils.BundledPlot(data=hist.history['loss'], title=f'Training Loss (Final = {test_loss:0.2f})', plot_type='m') 
                     accuracy_plot = iumsutils.BundledPlot(data=hist.history['accuracy'], title=f'Training Accuracy (Final = {100*test_acc:0.2f})', plot_type='m') 
-                    fermi_plot    = iumsutils.BundledPlot(data=iumsutils.normalized(targets), title=f'{evaluand}, {num_correct}/{eval_set_size} correct', plot_type='f')  
+                    extra_plots   = [*spectra_plots, loss_plot, accuracy_plot]
+                    
+                    # CREATION OF THE SPECIES SUMMARY OBJECT FOR THE CURRENT EVALUAND, PLOTTING OF EVALUATION RESULTS FOR THE CURRENT EVALUAND                
+                    curr_spec_sum = iumsutils.SpeciesSummary(evaluand) # SpeciesSummary objects handle calculation and plotting of individual evaluand results
+                    curr_spec_sum.add_all_insts(eval_titles, model.predict(np.array(eval_spectra))) # channel the instance names and predictions into the summary and process them
+                    
+                    train_window.set_status('Plotting Results to Folders...')
+                    curr_spec_sum.graph(curr_slice_folder/evaluand, prepended_plots=extra_plots) # results are also processed before graphing (two birds with one stone)
+                    self.species_summaries.append(curr_spec_sum) # collect all the species summaries for this slice, unpack them after the end of the slice
 
-                    predictions.insert(0, [iumsutils.average(column) for column in zip(*predictions)]) # prepend standardized sum of predictions to predictions
-                    eval_titles.insert(0, 'Standardized Summation') # prepend label to the above list to the titles list
-                    prediction_plots = [iumsutils.BundledPlot(data=prediction, title=eval_titles[i], plot_type='p', x_data=self.family_mapping.keys())
-                                                                    for i, prediction in enumerate(predictions)]  
-                    plots = [*spectra_plots, loss_plot, accuracy_plot, fermi_plot, *prediction_plots] # list containing all plots that will be plotted
-
-                # ORGANIZATION AND ADDITION OF RELEVANT DATA TO THE SUMMARY DICT
-                    if not self.summaries.get(point_range):    # adding relevant data to the summary dict                                 
-                        self.summaries[point_range] = ( [], {} )
-                    fermi_data, score_data = self.summaries[point_range]
-                    fermi_data.append(fermi_plot)
-
-                    if not score_data.get(curr_family):
-                        score_data[curr_family] = ( [], [] )
-                    names, scores = score_data[curr_family]
-                    names.append(evaluand)
-                    scores.append(round(num_correct/eval_set_size, 4))
-
-                # CREATION OF FOLDERS, IF NECESSARY, AND PLOTS FOR THE CURRENT ROUND
-                    if train_window.end_training:  # check for training abortion before writing files, reset and stop training if so
-                        messagebox.showerror('Training has Stopped!', 'Training aborted by user;\nProceed from Progress Window', parent=train_window.training_window)
-                        train_window.button_frame.enable()
-                        return # without a return, aborting training only pauses one iteration of loop 
-                
-                    train_window.set_status('Writing Results to Folders...')    # creating folders as necessary, writing results to folders 
-                    if not curr_slice_folder.exists():                                                           
-                        curr_slice_folder.mkdir(parents=True)
-                    iumsutils.adagraph(plots, save_dir=curr_slice_folder/evaluand)
-        
-            # DISTRIBUTION OF SUMMARY DATA TO APPROPRIATE RESPECTIVE FOLDERS
-            train_window.set_status('Distributing Result Summaries...')  
-            for point_range, (fermi_data, score_data) in self.summaries.items(): 
-                iumsutils.adagraph(fermi_data, ncols=5, save_dir=curr_fam_folder/point_range/'Fermi Summary.png') # NOTE: cannot use "curr_slice_folder" in this scope
-                        
-                with open(curr_fam_folder/point_range/f'{fam_str} Scores.csv', 'w') as score_file:
-                    for family, (names, scores) in score_data.items():  
-                        processed_scores = sorted(zip(names, scores), key=lambda x : x[1], reverse=True) # zip scores together and sort in ascending order by score
-                        processed_scores.append( ('AVERAGE', iumsutils.average(scores, precision=4)) )   # add the average score to the score list for each family
-
-                        score_file.write(family) 
-                        for name, score in processed_scores:
-                            score_file.write(f'\n{name}, {score}')
-                        score_file.write('\n\n')   # leave a gap between each family
+                # DISTRIBUTION OF SUMMARY DATA TO APPROPRIATE RESPECTIVE FOLDERS 
+                train_window.set_status(f'Distributing Results for {point_range}, {fam_str}...')
+                iumsutils.unpack_summaries(self.species_summaries, save_dir=curr_slice_folder, indicator=fam_str)
             
-            with open(curr_fam_folder/'Log File.txt', 'w') as settings_file:  # log the training time in the Train Settings file
-                model.summary(print_fn=lambda x : settings_file.write(f'{x}\n')) # write model to log file (since model is same throughout, need only write model on the last pass)
-                settings_file.write(f'\nTraining Time : {iumsutils.format_time(time() - start_time)}')   
+            with open(log_file_path, 'a') as log_file:  # log the time taken to complete the training cycle (open in append mode to prevent overwriting)
+                model.summary(print_fn=lambda x : log_file.write(f'{x}\n')) # write model to log file (since model is same throughout, should only write model on the last pass)
+                log_file.write(f'\nTraining Time : {iumsutils.format_time(time() - start_time)}')   
         
         # POST-TRAINING WRAPPING-UP
         train_window.button_frame.enable()  # open up post-training options in the training window
