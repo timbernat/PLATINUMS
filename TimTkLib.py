@@ -68,11 +68,11 @@ class DynOptionMenu:
         self.reset_default()
         
 class NumberedProgBar():
-    '''Progress bar which displays the numerical proportion complete (out of the set total) in the middle of the bar'''
-    def __init__(self, frame, total, default=0, style_num=1, length=260, row=0, col=0, cs=1):
+    '''Progress bar which displays the numerical proportion complete (out of the set maximum) in the middle of the bar'''
+    def __init__(self, frame, maximum, default=0, style_num=1, length=260, row=0, col=0, cs=1):
         self.curr_val = None
         self.default = default
-        self.total = total
+        self.maximum = maximum
         self.style = ttk.Style(frame)
         
         self.style_name = f'NumberedProgBar{style_num}'
@@ -81,26 +81,34 @@ class NumberedProgBar():
                                                  'sticky': 'nswe'}),
               ('Horizontal.Progressbar.label', {'sticky': ''})]) 
         
-        self.prog_bar = ttk.Progressbar(frame, style=self.style_name, orient='horizontal', length=length, maximum=total)
+        self.prog_bar = ttk.Progressbar(frame, style=self.style_name, orient='horizontal', length=length, maximum=maximum)
         self.prog_bar.grid(row=row, column=col, columnspan=cs)
         self.reset()
         
-    def set_progress(self, val):
-        if val > self.total:
-            raise ValueError # ensure that the progressbar is not set betond the total
-        else:
-            self.curr_val = val
-            self.prog_bar.configure(value=self.curr_val)
-            self.style.configure(self.style_name, text=f'{self.curr_val}/{self.total}')
-        
-    def increment(self):
-        if self.curr_val == self.total:
-            return # don't increment when full
-        else:
-            self.set_progress(self.curr_val+1) 
+    def configure(self, **kwargs): # wrapper for tkinter "configure()" method
+        self.prog_bar.configure(**kwargs)
             
     def reset(self):
         self.set_progress(self.default)
+        
+    def set_progress(self, val):
+        if val > self.maximum:
+            raise ValueError # ensure that the progressbar is not set betond the maximum
+        else:
+            self.curr_val = val
+            self.configure(value=self.curr_val)
+            self.style.configure(self.style_name, text=f'{self.curr_val}/{self.maximum}')
+            
+    def set_max(self, new_max):
+        '''change the maximum value of the progress bar (including the label)'''
+        self.maximum = new_max
+        self.configure(maximum = new_max)
+        
+    def increment(self):
+        if self.curr_val == self.maximum:
+            return # don't increment when full
+        else:
+            self.set_progress(self.curr_val+1) 
 
 
 class ToggleFrame(tk.LabelFrame):
@@ -115,7 +123,11 @@ class ToggleFrame(tk.LabelFrame):
     def apply_state(self, new_state):
         self.state = new_state
         for widget in self.winfo_children():
-            widget.configure(state = self.state)
+            try:
+                widget.configure(state = self.state)
+            except tk.TclError: # tkinter.ttk widgets are enabled and disabled completely differently, for no good reason
+                state = ((self.state == 'normal') and '!disabled' or self.state)
+                widget.state([state])
             
     def enable(self):
         self.apply_state('normal')
