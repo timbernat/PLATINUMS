@@ -31,13 +31,6 @@ def counter(iterable):
     return counts
         
 # some general-purpose utilities
-def get_by_filetype(extension, path=Path.cwd()):  
-    '''Get all files of a particular file type present in a given directory, (the current directory by default)'''
-    filetypes_present = tuple(file.name for file in path.iterdir() if file.suffix == extension)
-    if filetypes_present == ():
-        filetypes_present = (None,)
-    return filetypes_present
-   
 def ordered_and_counted(iterable):
     '''Takes an iterable of items and returns a sorted set of the items, and a dict of the counts of each item
     Specifically useful for getting the listing and counts of both species and families when jsonizing or transforming'''
@@ -60,6 +53,29 @@ def one_hot_mapping(iterable):
 def get_RIP(mode1_spectrum):
     '''Naive but surprisingly effective method for identifying the RIP value for Mode 1 spectra'''
     return max(mode1_spectrum[:len(mode1_spectrum)//2]) # takes the RIP to be the maximum value in the first half of the spectrum
+
+#file and path utilities
+def get_by_filetype(extension, path=Path.cwd()):  
+    '''Get all files of a particular file type present in a given directory, (the current directory by default)'''
+    filetypes_present = tuple(file.name for file in path.iterdir() if file.suffix == extension)
+    if filetypes_present == ():
+        filetypes_present = (None,)
+    return filetypes_present
+
+def clear_folder(path):
+    '''Clear out the contents of a folder. A more tactful approach than without deleting the folder and remaking it'''
+    if not path.is_dir():
+        raise ValueError(f'{path} does not point to a folder')
+    
+    for file in path.iterdir():
+        if file.is_dir():
+            clear_folder(file) # recursively clear any subfolders, as path can only delete empty files
+            try:
+                file.rmdir()
+            except OSError: # meant for the case where the file won't be deleted because the user is still inside it
+                raise PermissionError # convert to permission error (which my file checkers are built to handle)
+        else:
+            file.unlink()
 
 # utilities for handling instance naming and information packaging
 def sort_instance_names(name_list, key=lambda x:x):
@@ -92,11 +108,11 @@ def get_family(species):
 class Instance:
     '''A single instance of a particular chemical, useful for storing and accessing chemical and spectral information during training and transformations '''
     def __init__(self, name, species, family, spectrum, vector):
-        self.name = name
-        self.species = species
-        self.family = family
+        self.name     = name
+        self.species  = species
+        self.family   = family
         self.spectrum = spectrum
-        self.vector = vector
+        self.vector   = vector
         
 # utilities for plotting and for processing summary data post-training
 class BundledPlot:
@@ -104,15 +120,17 @@ class BundledPlot:
     valid_plot_types = ('s', 'm', 'f', 'p', 'v')
     
     def __init__(self, data, title, plot_type='s', x_data=None): # s (for standard or spectrum) is the default plot type
-        self.has_x_data = bool(x_data)
-        self.data = (self.has_x_data and (x_data, data) or data) # if x_data is given, will package that data together
-        self.title = title 
-        # eventually, add marker defaults + customization
-        
         if plot_type not in self.valid_plot_types:
             raise ValueError('Invalid plot type specified')
         else:
             self.plot_type = plot_type
+        
+        self.data  = data 
+        self.x_data = x_data
+        if not self.x_data: # if no x_data is specified, default to just ranges
+            self.x_data =  ((self.plot_type == 'v') and range(len(data[0])) or range(len(data))) # special case for variation plots, solely for backwards compatibility
+        self.title = title 
+        # eventually, add marker defaults + customization
         
 def adagraph(plot_list, ncols=6, save_dir=None, display_size=20):  # consider adding axis labels
         '''a general tidy internal graphing utility of my own devising, used to produce all manner of plots during training with one function'''
@@ -129,24 +147,21 @@ def adagraph(plot_list, ncols=6, save_dir=None, display_size=20):  # consider ad
             
             # specifying plot conditions by plot type
             if plot.plot_type == 's':                 # for plotting spectra or just generic plots
-                if plot.has_x_data: # unpack data, if necessary (meant specifically for plots with RIP slicing)
-                    curr_plot.plot(*plot.data, 'c-') 
-                else: 
-                    curr_plot.plot(plot.data, 'c-') 
+                curr_plot.plot(plot.x_data, plot.data, 'c-') 
             elif plot.plot_type == 'm':               # for plotting neural netwrok training metrics 
-                curr_plot.plot(plot.data, ('Loss' in plot.title and 'r-' or 'g-')) 
+                curr_plot.plot(plot.x_data, plot.data, ('Loss' in plot.title and 'r-' or 'g-')) 
             elif plot.plot_type == 'f':               # for plotting fermi-dirac plots
-                curr_plot.plot(plot.data, 'm-')  
+                curr_plot.plot(plot.x_data, plot.data, 'm-')  
                 curr_plot.set_ylim(0, 1.05)
             elif plot.plot_type == 'p':               # for plotting predictions
-                curr_plot.bar(*plot.data, color=('Summation' in plot.title and 'r' or 'b'))  # unpacking accounts for column labels by family for predictions
+                curr_plot.bar(plot.x_data, plot.data, color=('Summation' in plot.title and 'r' or 'b'))  # unpacking accounts for column labels by family for predictions
                 curr_plot.set_ylim(0,1)
                 curr_plot.tick_params(axis='x', labelrotation=45)
             elif plot.plot_type == 'v':               # for plotting variational summary/noise plots
                 (minima, averages, maxima) = plot.data
                 curr_plot.set_xlabel('Point Number')
                 curr_plot.set_ylabel('Intensity')
-                curr_plot.plot(maxima, 'b-', averages, 'r-', minima, 'g-') 
+                curr_plot.plot(plot.x_data, maxima, 'b-', plot.x_data, averages, 'r-', plot.x_data, minima, 'g-') 
                 curr_plot.legend(['Maximum', 'Average', 'Minimum'], loc='upper left')
         plt.tight_layout()
         if not save_dir: # consider adding a show AND plot option, not at all necessary now, however
