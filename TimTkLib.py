@@ -9,8 +9,8 @@ import math # needed for ceiling function
 class ConfirmButton: 
     '''A basic confirmation button, will execute whatever function is passed to it
     when pressed. Be sure to exclude parenthesis when passing the bound functions'''
-    def __init__(self, frame, command, padx=5, row=0, col=0, cs=1, color='deepskyblue2', sticky='e'):
-        self.button =tk.Button(frame, text='Confirm Selection', command=command, bg=color, padx=padx)
+    def __init__(self, frame, command, padx=5, row=0, col=0, underline=None, cs=1, color='deepskyblue2', sticky='e'):
+        self.button = tk.Button(frame, text='Confirm Selection', command=command, bg=color, underline=underline, padx=padx)
         self.button.grid(row=row, column=col, columnspan=cs, sticky=sticky)
         
         
@@ -69,7 +69,7 @@ class DynOptionMenu:
         
 class NumberedProgBar():
     '''Progress bar which displays the numerical proportion complete (out of the set maximum) in the middle of the bar'''
-    def __init__(self, frame, maximum, default=0, style_num=1, length=260, row=0, col=0, cs=1):
+    def __init__(self, frame, maximum=100, default=0, style_num=1, length=260, row=0, col=0, cs=1):
         self.curr_val = None
         self.default = default
         self.maximum = maximum
@@ -93,7 +93,7 @@ class NumberedProgBar():
         
     def set_progress(self, val):
         if val > self.maximum:
-            raise ValueError # ensure that the progressbar is not set betond the maximum
+            raise ValueError('Current progress value exceeds maximum') # ensure that the progressbar is not set beyond the maximum
         else:
             self.curr_val = val
             self.configure(value=self.curr_val)
@@ -103,6 +103,7 @@ class NumberedProgBar():
         '''change the maximum value of the progress bar (including the label)'''
         self.maximum = new_max
         self.configure(maximum = new_max)
+        self.set_progress(self.curr_val) # ensures that the display updates without incrementing the count, and performs max value check to boot
         
     def increment(self):
         if self.curr_val == self.maximum:
@@ -192,6 +193,9 @@ class Switch:
         
     def get_color(self):
         return self.value and self.on_color or self.off_color
+    
+    def get_value(self):
+        return self.value
     
     def apply_state(self, value):
         self.value = value
