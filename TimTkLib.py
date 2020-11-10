@@ -7,10 +7,9 @@ import math # needed for ceiling function
 
 
 class ConfirmButton: 
-    '''A basic confirmation button, will execute whatever function is passed to it
-    when pressed. Be sure to exclude parenthesis when passing the bound functions'''
-    def __init__(self, frame, command, padx=5, row=0, col=0, underline=None, cs=1, color='deepskyblue2', sticky='e'):
-        self.button = tk.Button(frame, text='Confirm Selection', command=command, bg=color, underline=underline, padx=padx)
+    '''A nice, basic blue confirmation button, will execute the function passed when pressed (remember to omit parenthesis!)'''
+    def __init__(self, frame, command, padx=5, pady=1, underline=None, row=0, col=0, cs=1, color='deepskyblue2', sticky='e'):
+        self.button = tk.Button(frame, text='Confirm Selection', command=command, bg=color, underline=underline, padx=padx, pady=pady)
         self.button.grid(row=row, column=col, columnspan=cs, sticky=sticky)
         
         
@@ -227,7 +226,7 @@ class GroupableCheck:
         self.output = output
         self.state = state
         self.cb = tk.Checkbutton(frame, text=value, variable=self.var, onvalue=self.value, offvalue=None,
-                              state=self.state, command=self.edit_output)
+                              state=self.state, command=self.edit_output) 
         self.cb.grid(row=row, column=col, sticky='w')
         self.cb.deselect()
         
@@ -271,15 +270,16 @@ class CheckPanel:
         
 class SelectionWindow:
     '''The window used in -IUMS programs to select species for evaluation'''
-    def __init__(self, main, parent_frame, size, selections, output, window_title='Select Members to Include', ncols=1):
+    def __init__(self, main, parent_frame, selections, output, window_title='Select Members to Include', ncols=1):
         self.window = tk.Toplevel(main)
         self.window.title(window_title)
-        self.window.geometry(size)
         self.parent = parent_frame
-        self.parent.disable()
         
-        self.panel = CheckPanel(self.window, selections, output, ncols=ncols)
-        self.confirm = ConfirmButton(self.window, self.confirm, row=self.panel.row_span, col=ncols-1)
+        self.panel  = CheckPanel(self.window, selections, output, ncols=ncols)
+        self.button = tk.Button(self.window, text='Confirm Selection', command=self.confirm, bg='deepskyblue2', underline=0, padx=5)
+        self.button.grid(row=self.panel.row_span, column=ncols-1, sticky='nesw', padx=2, pady=2)
+        self.window.bind('c', lambda event : self.confirm()) # bind the confirmation command to the 'c' key
+        self.parent.disable() # disable the parent to ensure no cross-binding occurs
 
     def confirm(self):
         self.parent.enable()
