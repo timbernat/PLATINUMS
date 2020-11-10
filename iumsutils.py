@@ -57,7 +57,10 @@ def get_RIP(mode1_spectrum):
 #file and path utilities
 def get_by_filetype(extension, path=Path.cwd()):  
     '''Get all files of a particular file type present in a given directory, (the current directory by default)'''
-    filetypes_present = tuple(file.name for file in path.iterdir() if file.suffix == extension)
+    if type(path) == str:
+        path = Path(path) # convert any string input (i.e. just the name) into Path object
+    
+    filetypes_present = tuple(file.stem for file in path.iterdir() if file.suffix == extension)
     if filetypes_present == ():
         filetypes_present = (None,)
     return filetypes_present
@@ -86,7 +89,7 @@ def isolate_species(instance_name): # NOTE: consider expanding range of allowabl
     '''Strips extra numbers off the end of the name of an instance and just tells you its species'''
     return re.sub('(\s|-)\d+\s*\Z', '', instance_name)  # regex to crop terminal digits off of an instance in a variety of possible formats
 
-def get_family(species):
+def get_family(species): # while called species, this method works with instance names as well
     '''Takes the name of a species OR of an instance and returns the chemical family that that species belongs to;
     determination is based on IUPAC naming conventions by suffix'''
     iupac_suffices = {  'ate':'Acetates', # Esters might be preferable outside the context of the current datasets
@@ -105,6 +108,25 @@ def get_family(species):
     else:
         return 'Unknown'
     
+def get_carbon_ordering(species):
+    '''Naive method to help with ordering compound names based on carbon number and a handful of prefices, used to ensure cinsistent sorting by species name.
+    NOTE that the number this method assigns is not precisely the carbon number, but an analog that allows for numerical ordering in the desired manner'''
+    iupac_numbering = {'meth' : 1,
+                       'eth(?!er)' : 2, # prevents all ethers from being assigned "2"
+                       'prop' : 3,
+                       'but'  : 4,
+                       'pent' : 5,
+                       'hex'  : 6,
+                       'hept' : 7,
+                       'oct'  : 8,
+                       'non(?!e)'  : 9, # prevents all ketones from being assigned "9"
+                       'dec'  : 10}
+    for affix, number in iupac_numbering.items():
+        if re.search(f'(?i){affix}', species): # ignore capitalization (finds affix anywhere in word)
+            return number + 0.5*bool(re.search(f'(?i)(iso|sec-){affix}', species)) # places "iso" and "sec-" compounds slightly lower on the list (+0.5, between compounds)
+    else:
+        return 100 # arbitrary, needs to return a number much greater than the rest to be placed at end
+    
 class Instance:
     '''A single instance of a particular chemical, useful for storing and accessing chemical and spectral information during training and transformations '''
     def __init__(self, name, species, family, spectrum, vector):
@@ -122,13 +144,15 @@ class BundledPlot:
     def __init__(self, data, title, plot_type='s', x_data=None): # s (for standard or spectrum) is the default plot type
         if plot_type not in self.valid_plot_types:
             raise ValueError('Invalid plot type specified')
+
+        self.plot_type = plot_type
+        if self.plot_type == 'v': # special cases needed for calculating pointwise aggregate variation plots
+            self.data = [tuple(map(funct, zip(*data))) for funct in (min, average, max)]
+            self.x_data = (x_data and x_data or range(len(data[0]))) # if no x_data is specified, default to just range over number of points
         else:
-            self.plot_type = plot_type
-        
-        self.data  = data 
-        self.x_data = x_data
-        if not self.x_data: # if no x_data is specified, default to just ranges
-            self.x_data =  ((self.plot_type == 'v') and range(len(data[0])) or range(len(data))) # special case for variation plots, solely for backwards compatibility
+            self.data  = data # otherwise, leave data as is
+            self.x_data = (x_data and x_data or range(len(data))) # if no x_data is specified, default to just range over data 
+            
         self.title = title 
         # eventually, add marker defaults + customization
         
@@ -220,7 +244,7 @@ class SpeciesSummary:
         adagraph(plot_list, ncols=ncols, save_dir=save_dir) 
         
 def unpack_summaries(species_summaries, save_dir, indicator=None):
-    '''Takes a list of species summaries (presume)'''
+    '''Takes a list of species summaries, unpacks them into score sheets and fermi plots summaries, and writes them to the relevant directory'''
     try:
         families = SpeciesSummary.family_mapping.keys() # ensure that the summary class has a mapping present and use it to enumerate the families
     except ValueError:
@@ -229,12 +253,13 @@ def unpack_summaries(species_summaries, save_dir, indicator=None):
     fermi_summary = [spec_sum.fermi_plot for spec_sum in species_summaries] # collect together all the fermi plots
     adagraph(fermi_summary, ncols=5, save_dir=save_dir/'Fermi Summary.png') # plot the fermi summary
 
-    score_folder_name = f'{indicator and (indicator + " ") or ""}Scores.csv' # prepend an optional indicator, so that multiple score files can be opened at once
+    score_folder_name = f'{indicator and (indicator + " ") or ""}Scores.csv' # prepend an optional indicator, so that files are not named the same (and can be viewed at the same time)
     with open(save_dir/score_folder_name, 'w', newline='') as score_file: # open the score file and unpack scores by family                         
         for family in families:
             processed_scores = [(spec_sum.species, spec_sum.score) for spec_sum in species_summaries if spec_sum.family == family] 
             if processed_scores: # only write scores if the family is actually present
-                processed_scores.sort(key=lambda x : x[1], reverse=True) # zip scores together and sort in ascending order by score
+                processed_scores.sort(key=lambda x : get_carbon_ordering(x[0])) # zip scores together and order then by modified carbon number rules
+                #processed_scores.sort(key=lambda x : x[1], reverse=True) # zip scores together and sort in ascending order by score
                 processed_scores.append( ('AVERAGE', average(pair[1] for pair in processed_scores)) ) # score in second position (still bundled to preserve pairing)
 
                 score_file.write(family) 
