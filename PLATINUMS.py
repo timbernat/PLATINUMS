@@ -229,7 +229,7 @@ class PLATINUMS_App:
 
         self.cycle_fams   = tk.BooleanVar()
         self.cycle_button = tk.Checkbutton(self.param_frame, text='Cycle?', variable=self.cycle_fams)
-        self.cycle_button.grid(row=0, column=3)
+        self.cycle_button.grid(row=0, column=3, padx=1)
         
         self.upper_bound_entry = ttl.LabelledEntry(self.param_frame, text='Upper Bound:',    var=tk.IntVar(), default=500, row=4, col=0)
         self.slice_dec_entry   = ttl.LabelledEntry(self.param_frame, text='Slice Decrement:', var=tk.IntVar(), default=10, row=4, col=2)
@@ -328,13 +328,13 @@ class PLATINUMS_App:
         '''Method called for initiating input (be it manual or from preset)'''
         if self.input_mode.get() == 'Manual Input': # ensures that keybindings don't work when the frame is disabled
             self.parameters['data_files'] = [] # ensure a list exists AND is empty when selecting files
-            ttl.SelectionWindow(self.main, self.input_frame, '550x120', sorted(iumsutils.get_by_filetype('.json', self.data_path)),
+            ttl.SelectionWindow(self.main, self.input_frame, sorted(iumsutils.get_by_filetype('.json', self.data_path)),
                                 self.parameters['data_files'], window_title='Select data file(s) to train over', ncols=4)    
             
         elif self.input_mode.get() == 'Preset from File': # ensures that keybindings don't work when the frame is disabled
             preset_path = Path(filedialog.askopenfilename(title='Choose Training Preset', initialdir='./Training Presets', filetypes=(('JSONs', '*.json'),) ))
             try: # NOTE: scope looks a bit odd but is correct, do not change indentation of try/excepts
-                with open(preset_path, 'r') as preset_file:
+                with preset_path.open() as preset_file:
                     self.parameters = json.load(preset_file) # load in the parameter preset (ALL settings)     
             except PermissionError: # do nothing if user cancels selection
                 self.input_mode.set(0) 
@@ -351,7 +351,7 @@ class PLATINUMS_App:
             self.reset()
         else: # checking whether properties match across multiple selected data files; if they do, that simplifies much of the subsequent control flow
             for i, file in enumerate(self.parameters['data_files']):
-                with open(self.data_path/f'{file}.json', 'r') as json_file:
+                with (self.data_path/f'{file}.json').open() as json_file:
                     json_data = json.load(json_file)
                     if i == 0: # flag the first file read differently, for comparison with all others (moot in the case of a single file)
                         initial_data = json_data
@@ -394,9 +394,9 @@ class PLATINUMS_App:
         self.parameters['read_mode'] = self.read_mode.get() # record the read mode to parameters with each selection
         
         if self.read_mode.get() == 'By Species':
-            ttl.SelectionWindow(self.main, self.selection_frame, '950x190', self.species, self.parameters['selections'], window_title='Select Species to evaluate', ncols=8)
+            ttl.SelectionWindow(self.main, self.selection_frame, self.species, self.parameters['selections'], window_title='Select Species to evaluate', ncols=8)
         elif self.read_mode.get() == 'By Family':
-            ttl.SelectionWindow(self.main, self.selection_frame, '270x85', self.families, self.parameters['selections'], window_title='Select Families to evaluate over', ncols=3)
+            ttl.SelectionWindow(self.main, self.selection_frame, self.families, self.parameters['selections'], window_title='Select Families to evaluate over', ncols=3)
         # case for "Select All" is covered in confirm_selections() in order to be compatible with loading from preset
 
     def confirm_selections(self):
@@ -491,7 +491,7 @@ class PLATINUMS_App:
                 if not any(parent_folder.iterdir()): # if the file exists but is empty, can also proceed with no issues
                     break 
                 elif (parent_folder/'Training Preset.json').exists(): # otherwise, if the folder has a preset present...
-                    with open(parent_folder/'Training Preset.json', 'r') as existing_preset_file: 
+                    with (parent_folder/'Training Preset.json').open() as existing_preset_file: 
                         existing_preset = json.load(existing_preset_file)
 
                     if existing_preset != self.parameters: # ...and if the preset is different to the current preset, start the checks over with incremented name
@@ -529,7 +529,7 @@ class PLATINUMS_App:
             results_folder = Path(parent_folder, f'{data_file} Results') # main folder with all results for a particular data file  
             results_folder.mkdir(exist_ok=True)        
 
-            with open(self.data_path/f'{data_file}.json', 'r') as json_file: # read in new chem_data for each file in the training queue
+            with (self.data_path/f'{data_file}.json').open() as json_file: # read in new chem_data for each file in the training queue
                 chem_data = [iumsutils.Instance(*properties) for properties in json.load(json_file)['chem_data']] # unpack data into Instance object
 
             # SECONDARY TRAINING LOOP, REGULATES CYCLING BETWEEN FAMILIARS AND UNFAMILIARS
@@ -590,7 +590,7 @@ class PLATINUMS_App:
 
                             if early_stopping and early_stopping_callback.stopped_epoch: # if early stopping has indeed been triggered:
                                 train_window.epoch_progress.set_max(early_stopping_callback.stopped_epoch + 1) # set progress max to stopped epoch, to indicate that training is done   
-                                with open(log_file_path, 'a') as log_file: 
+                                with log_file_path.open(mode='a') as log_file: 
                                     log_file.write(f'{fam_training and fam_str or evaluand} training round stopped early at epoch {early_stopping_callback.stopped_epoch + 1}\n')
 
                             if save_weights and not train_window.end_training: # if saving is enabled, save the model to the current result directory
@@ -614,18 +614,14 @@ class PLATINUMS_App:
                             train_window.button_frame.enable()
                             return # without a return, aborting training only pauses one iteration of loop
 
-                        # PACKAGING OF EXTRANEOUS PLOTS
-                        agg_spectrum  = [tuple(map(funct, zip(*eval_spectra))) for funct in (min, iumsutils.average, max)] # compute data for the evaluand's aggregate spectrum 
-                        agg_plot      = iumsutils.BundledPlot(data=agg_spectrum, title=f'Agg. Spectrum of {evaluand}', x_data=range(lower_bound, upper_bound), plot_type='v')
-                        loss_plot     = iumsutils.BundledPlot(data=hist.history['loss'], title=f'Training Loss (Final={test_loss:0.2f})', plot_type='m') 
-                        accuracy_plot = iumsutils.BundledPlot(data=hist.history['accuracy'], title=f'Training Accuracy (Final={test_acc:0.2f})', plot_type='m') 
-                        extra_plots   = [agg_plot, loss_plot, accuracy_plot] # aggregate spectrum, plot of training/test losses, and plot of training/test accuracies
-
                         # CREATION OF THE SPECIES SUMMARY OBJECT FOR THE CURRENT EVALUAND, PLOTTING OF EVALUATION RESULTS FOR THE CURRENT EVALUAND                
                         curr_spec_sum = iumsutils.SpeciesSummary(evaluand) # SpeciesSummary objects handle calculation and plotting of individual evaluand results
                         curr_spec_sum.add_all_insts(eval_titles, model.predict(np.array(eval_spectra))) # channel the instance names and predictions into the summary and process them
-
+                        
                         train_window.set_status('Plotting Results to Folder...')
+                        extra_plots = [iumsutils.BundledPlot(eval_spectra, f'PWA of {evaluand}', x_data=range(lower_bound, upper_bound), plot_type='v'),
+                                       iumsutils.BundledPlot(hist.history['loss'], f'Training Loss (Final={test_loss:0.2f})', plot_type='m'), 
+                                       iumsutils.BundledPlot(hist.history['accuracy'], f'Training Accuracy (Final={test_acc:0.2f})', plot_type='m')]
                         curr_spec_sum.graph(curr_slice_folder/evaluand, prepended_plots=extra_plots) # results are also processed before graphing (two birds with one stone)
                         self.species_summaries.append(curr_spec_sum) # collect all the species summaries for this slice, unpack them after the end of the slice
 
@@ -633,7 +629,7 @@ class PLATINUMS_App:
                     train_window.set_status(f'Compiling Scores and Fermi Summary...')
                     iumsutils.unpack_summaries(self.species_summaries, save_dir=curr_slice_folder, indicator=fam_str)
 
-                with open(log_file_path, 'a') as log_file:  # log the time taken to complete the training cycle (open in append mode to prevent overwriting)
+                with log_file_path.open(mode='a') as log_file:  # log the time taken to complete the training cycle (open in append mode to prevent overwriting)
                     model.summary(print_fn=lambda x : log_file.write(f'{x}\n')) # write model to log file (since model is same throughout, should only write model on the last pass)
                     log_file.write(f'\nTraining Time : {iumsutils.format_time(time() - start_time)}') # log the time taken for this particular training session as well
         
