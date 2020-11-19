@@ -3,7 +3,7 @@ import iumsutils           # library of functions specific to my "-IUMS" class o
 import TimTkLib as ttl     # library of custom tkinter widgets I've written to make GUI assembly more straightforward 
 
 # Built-in Imports
-import json, shutil
+import json, os, shutil
 from time import time                      
 from pathlib import Path
 
@@ -175,8 +175,8 @@ class PLATINUMS_App:
     def __init__(self, main):       
     #Main Window
         self.main = main
-        self.main.title('PLATINUMS 5.0.0-alpha')
-        self.main.geometry('445x417')
+        self.main.title('PLATINUMS 5.1.1-alpha')
+        #self.main.geometry('445x417')
         self.parameters = {}
         
         self.data_path, self.save_path = Path('TDMS Datasets'), Path('Saved Training Results') # specify here which folders to read data and save results to, respectively
@@ -190,7 +190,7 @@ class PLATINUMS_App:
         
         self.reset_button = tk.Button(self.main, text='Reset', underline=0, padx=20, bg='orange', command=self.reset)
         self.main.bind('r', lambda event : self.reset())
-        self.reset_button.grid(row=5, column=4)
+        self.reset_button.grid(row=5, column=4, padx=2)
         
         self.tpmode = tk.BooleanVar() # option to switch from training to prediction mode, WIP and low priority for now
         self.tpmode_button = tk.Checkbutton(self.main, text='Predict', var=self.tpmode, command=self.switch_tpmode, state='disabled')
@@ -209,9 +209,9 @@ class PLATINUMS_App:
         self.selection_frame = ttl.ToggleFrame(self.main, text='Select Instances to Evaluate: ', padx=5, row=2)
         self.read_mode       = tk.StringVar()
         
-        for i, mode in enumerate(('Select All', 'By Family', 'By Species')): # build selection type buttons sequentially w/o class references (not needed)
-            tk.Radiobutton(self.selection_frame, text=mode, value=mode, var=self.read_mode, command=self.further_sel).grid(row=0, column=i)
-        self.confirm_sels = ttl.ConfirmButton(self.selection_frame, command=self.confirm_selections, padx=4, row=0, col=3)
+        for i, (mode, underline) in enumerate( (('Select All', 7), ('By Family', 3), ('By Species', 3)) ): # build selection type buttons sequentially w/o class references
+            tk.Radiobutton(self.selection_frame, text=mode, value=mode, var=self.read_mode, underline=underline, command=self.further_sel).grid(row=0, column=i)
+        self.confirm_sels = ttl.ConfirmButton(self.selection_frame, command=self.confirm_selections, underline=0, padx=4, row=0, col=3)
         
     #Frame 2
         self.hyperparam_frame    = ttl.ToggleFrame(self.main, text='Set Hyperparameters: ', padx=8, row=3)
@@ -221,11 +221,11 @@ class PLATINUMS_App:
         self.confirm_hyperparams = ttl.ConfirmButton(self.hyperparam_frame, command=self.confirm_hp, row=1, col=3, cs=2)
         
     #Frame 3
-        self.param_frame = ttl.ToggleFrame(self.main, text='Set Training Parameters: ', padx=6, row=4) 
-        self.fam_switch  = ttl.Switch(self.param_frame, text='Familiar Training :', row=0, col=1)
-        self.save_switch = ttl.Switch(self.param_frame, text='Model Saving:',       row=1, col=1)
-        self.stop_switch = ttl.Switch(self.param_frame, text='Early Stopping: ',    row=2, col=1)
-        self.convergence_switch = ttl.Switch(self.param_frame, text='Convergence: ',row=3, col=1)
+        self.param_frame = ttl.ToggleFrame(self.main, text='Set Training Parameters: ', padx=6,  row=4) 
+        self.fam_switch  = ttl.Switch(self.param_frame, text='Familiar Training :', underline=0, row=0, col=1)
+        self.save_switch = ttl.Switch(self.param_frame, text='Model Saving:',       underline=6, row=1, col=1)
+        self.stop_switch = ttl.Switch(self.param_frame, text='Early Stopping: ',    underline=0, row=2, col=1)
+        self.convergence_switch = ttl.Switch(self.param_frame, text='Convergence: ',underline=3, row=3, col=1)
 
         self.cycle_fams   = tk.BooleanVar()
         self.cycle_button = tk.Checkbutton(self.param_frame, text='Cycle?', variable=self.cycle_fams)
@@ -237,22 +237,22 @@ class PLATINUMS_App:
         self.n_slice_entry     = ttl.LabelledEntry(self.param_frame, text='Number of Slices:', var=tk.IntVar(), default=1, row=5, col=2)
         self.convergence_switch.dependents = None #(self.upper_bound_entry, self.slice_dec_entry, self.lower_bound_entry, self.n_slice_entry)
         
-        self.confirm_and_preset   = tk.Button(self.param_frame, text='Confirm and Save Preset', padx=12, command=self.confirm_tparams_and_preset)
-        self.confirm_train_params = ttl.ConfirmButton(self.param_frame, command=self.confirm_tparams, row=6, col=2, cs=2)      
+        self.confirm_and_preset   = tk.Button(self.param_frame, text='Confirm and Save Preset', underline=17, padx=12, command=self.confirm_tparams_and_preset)
+        self.confirm_train_params = ttl.ConfirmButton(self.param_frame, command=self.confirm_tparams, underline=0, row=6, col=2, cs=2)      
         self.confirm_and_preset.grid(row=6, column=0, columnspan=2, sticky='w')
 
     # Frame 4 - contains only the button used to trigger a main action  
         self.activation_frame = ttl.ToggleFrame(self.main, text='', padx=0, pady=0, row=5)   
         self.train_button = tk.Button(self.activation_frame, text='TRAIN', padx=22, width=44, bg='deepskyblue2', underline=0, command=self.training)
         self.train_button.grid(row=0, column=0)
-        self.species_summaries = []
+        self.family_summaries = {}
         
         self.pred_button = tk.Button(self.activation_frame, text='PREDICT', padx=22, width=44, bg='mediumorchid2', state='disabled', command=lambda:None)
         self.pred_button.grid(row=0, column=0)
         self.switch_tpmode()
          
     # Packaging together some widgets and attributes, for ease of reference (also useful for self.reset() and self.isolate() methods)
-        self.arrays   = (self.parameters, self.species, self.families, self.family_mapping, self.species_summaries) 
+        self.arrays   = (self.parameters, self.species, self.families, self.family_mapping, self.family_summaries) 
         self.frames   = (self.input_frame, self.selection_frame, self.hyperparam_frame, self.param_frame, self.activation_frame)
 
         self.switch_mapping = {self.fam_switch : 'fam_training',
@@ -270,6 +270,7 @@ class PLATINUMS_App:
         
         self.main.bind('<Key>', self.key_in_input) # activate internal conditional hotkey binding
         self.reset() # set menu to default configuration
+        filedialog.Open(title='test', initialdir=Path('nnenv'))
         
     #General Methods
     def lift(self):
@@ -303,6 +304,28 @@ class PLATINUMS_App:
                 self.initial_input()
             elif event.char == 'c': # binding for confirmation
                 self.confirm_input_mode()
+        elif self.selection_frame.state == 'normal':
+            opt_mapping = {'a' : 'Select All',
+                           'f' : 'By Family', 
+                           's' : 'By Species'}
+            if event.char in opt_mapping:
+                self.read_mode.set(opt_mapping[event.char]) # choose one of the read modes if the proper hotkey is selected
+                self.further_sel() # open further selection menu if not just selecting all
+            elif event.char == 'c':
+                self.confirm_selections()
+        #elif self.hyperparam_frame.state == 'normal' and event.char == 'c': # disabled for now, as the character "c" gets typed into entry
+            #self.confirm_hp()
+        elif self.param_frame.state == 'normal':
+            switch_mapping = {'f' : self.fam_switch,
+                              's' : self.save_switch,
+                              'e' : self.stop_switch,
+                              'v' : self.convergence_switch}
+            if event.char in switch_mapping:
+                switch_mapping[event.char].toggle() # make parameter switches toggleable with keyboard
+            elif event.char == 'p': # add hotkey to save preset and proceed...
+                self.confirm_tparams_and_preset()
+            elif event.char == 'c': # or just to proceed
+                self.confirm_tparams()
         elif self.activation_frame.state == 'normal' and event.char == 't': # do not allow hotkeys to work if frame is disabled
             self.training()
     
@@ -341,7 +364,7 @@ class PLATINUMS_App:
                              
     def confirm_input_mode(self):
         '''Performs final check over input and determines how to proceed appropriately'''
-        if not self.input_mode.get():
+        if self.input_mode.get() == '0': # interpreting str as bool doesn't seem to work directly
             messagebox.showerror('No input mode selected!', 'Please choose either "Manual" or "Preset" input mode')
         elif 'data_files' not in self.parameters: # if no data_files entry exists
             messagebox.showerror('Files Undefined', 'Property "data_files" either mislabelled or missing from parameters, please check preset')
@@ -350,6 +373,7 @@ class PLATINUMS_App:
             messagebox.showerror('File Error', 'No data file(s) selected')
             self.reset()
         else: # checking whether properties match across multiple selected data files; if they do, that simplifies much of the subsequent control flow
+            self.main.config(cursor='wait') # this make take a moment for large sets of files, indicate to user (via cursor) to be patient
             for i, file in enumerate(self.parameters['data_files']):
                 with (self.data_path/f'{file}.json').open() as json_file:
                     json_data = json.load(json_file)
@@ -366,6 +390,7 @@ class PLATINUMS_App:
                 self.family_mapping = initial_data['family_mapping']
                 self.spectrum_size  = initial_data['spectrum_size'] 
                 self.upper_bound_entry.set_value(self.spectrum_size) # adjust the slicing upper bound to the size of spectra passed
+            self.main.config(cursor='') # return cursor to normal
             
             if self.input_mode.get() == 'Manual Input':
                 self.isolate(self.selection_frame)                                
@@ -462,6 +487,7 @@ class PLATINUMS_App:
         # UNPACKING INTERNAL PARAMETERS DICT AND INITIALIZING SOME VALUES
         overall_start_time = time() # get start of runtime for entire training routine
         iumsutils.SpeciesSummary.family_mapping = self.family_mapping # use the current mapping for producing summaries later
+        iumsutils.FamilySummary.families = self.families # use the current set of families for producing dataset-wide summaries later
         
         selections      = self.parameters['selections']
         num_epochs      = self.parameters['num_epochs'] 
@@ -536,10 +562,9 @@ class PLATINUMS_App:
             for familiar_cycling in range(1 + cycle_fams):    
                 start_time = time() # log start time of each cycle, so that training duration can be computed afterwards  
                 
-                if familiar_cycling:
-                    fam_training = not fam_training # invert familiar state upon cycling (only locally, though, not in the parameters or preset)
-                    self.fam_switch.toggle()        # purely cosmetic, but allows the user to see that cycling is in fact occurring
+                fam_training = (self.parameters['fam_training'] | familiar_cycling) # xor used to encode the inversion behavior on second cycle          
                 fam_str = f'{fam_training and "F" or "Unf"}amiliar'  
+                self.fam_switch.apply_state(fam_training)        # purely cosmetic, but allows the user to see that cycling is in fact occurring
                 train_window.set_familiar_status(fam_str)
 
                 curr_fam_folder = results_folder/fam_str # folder with the results from the current (un)familiar training, parent for all that follow 
@@ -553,13 +578,16 @@ class PLATINUMS_App:
                     point_range = f'Points {lower_bound}-{upper_bound}'
                     if lower_bound == 0 and upper_bound == self.spectrum_size: 
                         point_range = point_range + ' (Full Spectra)' # indicate whether the current slice is in fact truncated
+                   
                     train_window.set_slice(point_range)
-
-                    self.species_summaries.clear() # empty the summaries list with each slice
                     curr_slice_folder = curr_fam_folder/point_range
                     curr_slice_folder.mkdir(exist_ok=True)
+                    
+                    if not self.family_summaries.get(point_range):
+                        self.family_summaries[point_range] = iumsutils.SummaryCollator()
 
                     # INNERMOST TRAINING LOOP, CYCLES THROUGH ALL THE SELECTED EVALUANDS
+                    family_summary = iumsutils.FamilySummary(data_file, fam_str)
                     for evaluand_idx, evaluand in enumerate(selections):                  
                         train_window.set_status('Training...')
                         train_window.round_progress.increment() 
@@ -623,21 +651,26 @@ class PLATINUMS_App:
                                        iumsutils.BundledPlot(hist.history['loss'], f'Training Loss (Final={test_loss:0.2f})', plot_type='m'), 
                                        iumsutils.BundledPlot(hist.history['accuracy'], f'Training Accuracy (Final={test_acc:0.2f})', plot_type='m')]
                         curr_spec_sum.graph(curr_slice_folder/evaluand, prepended_plots=extra_plots) # results are also processed before graphing (two birds with one stone)
-                        self.species_summaries.append(curr_spec_sum) # collect all the species summaries for this slice, unpack them after the end of the slice
+                        family_summary.add_specsum(curr_spec_sum) # collect all the species summaries for this slice, unpack them after the end of the slice
 
                     # DISTRIBUTION OF SUMMARY DATA TO APPROPRIATE RESPECTIVE FOLDERS 
                     train_window.set_status(f'Compiling Scores and Fermi Summary...')
-                    iumsutils.unpack_summaries(self.species_summaries, save_dir=curr_slice_folder, indicator=fam_str)
-
+                    family_summary.unpack_summaries(save_dir=curr_slice_folder, indicator=fam_str)
+                    self.family_summaries[point_range].add_famsum(family_summary) # pack together family summaries under the collator object for the current slice
+                
                 with log_file_path.open(mode='a') as log_file:  # log the time taken to complete the training cycle (open in append mode to prevent overwriting)
                     model.summary(print_fn=lambda x : log_file.write(f'{x}\n')) # write model to log file (since model is same throughout, should only write model on the last pass)
                     log_file.write(f'\nTraining Time : {iumsutils.format_time(time() - start_time)}') # log the time taken for this particular training session as well
         
         # POST-TRAINING WRAPPING-UP
+        for point_range, collator in self.family_summaries.items():
+                    collator.unpack_summaries(save_dir=parent_folder, point_range=point_range) # produce collated results in the main folder for ease of reference
+                
         train_window.button_frame.enable()  # open up post-training options in the training window
         train_window.abort_button.configure(state='disabled') # disable the abort button (idiotproofing against its use after training)
         train_window.set_status(f'Finished in {iumsutils.format_time(time() - overall_start_time)}') # display the time taken for all trainings in the training window
-        messagebox.showinfo('Training Completed Succesfully!', f'Training results can be found in the folder:\n"{parent_folder}"', parent=train_window.training_window)
+        if messagebox.askyesno('Training Completed Succesfully!', 'Training finished; view training results in folder?', parent=train_window.training_window):
+            os.startfile(parent_folder) # notify user that training has finished and prompt them to view the results in situ
         
 if __name__ == '__main__':        
     main_window = tk.Tk()
