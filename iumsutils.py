@@ -43,6 +43,10 @@ def normalized(iterable):
         return tuple( (i - min(iterable))/(max(iterable) - min(iterable)) for i in iterable)
     except ZeroDivisionError: # if all data have the same value, max=min and min/max normalization will fail
         return tuple(i for i in iterable) # in that case, just return the original data
+    
+def dictmerge(dictlist):
+    '''Takes a list of dictionaries with identical keys and combines them into a single dictionary with the values combined into lists under each entry'''
+    return {key : [subdict[key] for subdict in dictlist] for key in dictlist[0]}
 
 def one_hot_mapping(iterable):
     '''Takes and iterable and returns a dictionary of the values in the iterable, assigned sequentially to one-hot vectors
@@ -81,9 +85,9 @@ def clear_folder(path):
             file.unlink()
 
 # utilities for handling instance naming and information packaging
-def sort_instance_names(name_list, key=lambda x:x):
+def sort_instance_names(name_list, data_key=lambda x:x):
     '''Sorts a a list of instance names in ascending order based on the tailing digits. Optional "key" arg for when some operation is needed to return the name (e.g. Instance.name)'''
-    return sorted( name_list, key=lambda y : int(re.findall('[0-9]+\Z', key(y))[0]) )
+    return sorted( name_list, key=lambda y : int(re.findall('[0-9]+\Z', data_key(y))[0]) )
         
 def isolate_species(instance_name): # NOTE: consider expanding range of allowable strings in the future
     '''Strips extra numbers off the end of the name of an instance and just tells you its species'''
@@ -221,7 +225,6 @@ class SpeciesSummary:
         '''The self.add() operation, but over two whole lists instead, saves time and code'''
         for name, pred in zip(name_list, predictions):
             self.add_inst(name, pred)
-        self.process_insts() # since we know all instances have been input, we can process immediately
             
     def process_insts(self):
         '''Compute the species score and assemble the fermi and summation plots''' 
@@ -235,34 +238,104 @@ class SpeciesSummary:
         self.fermi_plot = BundledPlot(fermi_data, fermi_title, plot_type='f')
 
     def graph(self, save_dir=None, ncols=6, prepended_plots=[]):
+        '''Produce the result plot collection for the species'''
         if not self.fermi_plot:
             self.process_insts() # process instances if it has not already been done
         instance_plots = [BundledPlot(data, name, plot_type='p', x_data=self.family_mapping.keys()) # bundle the name-prediction pairs into my custom plot objects
-                          for name, data in sort_instance_names(self.inst_mapping.items(), key=lambda x:x[0])] # ensure data is in ascending order by name
+                          for name, data in sort_instance_names(self.inst_mapping.items(), data_key=lambda x:x[0])] # ensure data is in ascending order by name
         
         plot_list = [*prepended_plots, self.fermi_plot, self.summation_plot, *instance_plots]
         adagraph(plot_list, ncols=ncols, save_dir=save_dir) 
-        
-def unpack_summaries(species_summaries, save_dir, indicator=None):
-    '''Takes a list of species summaries, unpacks them into score sheets and fermi plots summaries, and writes them to the relevant directory'''
-    try:
-        families = SpeciesSummary.family_mapping.keys() # ensure that the summary class has a mapping present and use it to enumerate the families
-    except ValueError:
-        raise ValueError('SpeciesSummary.family_mapping has not been instantiated')
+
+class FamilySummary:
+    '''Helper class for lumping together the SpeciesSummary objects from a given dataset into score sheets and fermi summaries. Used as well for autocollation'''
+    families = None # class variable, set for all FamilyMapping objects prior to use
     
-    fermi_summary = [spec_sum.fermi_plot for spec_sum in species_summaries] # collect together all the fermi plots
-    adagraph(fermi_summary, ncols=5, save_dir=save_dir/'Fermi Summary.png') # plot the fermi summary
+    def __init__(self, source_file, fam_status):
+        if not self.families:
+            raise ValueError('FamilySummary.families has not been instantiated')
+            
+        self.source_file = source_file
+        self.fam_status  = fam_status
+    
+        self.scores = {family : [] for family in self.families}        
+        self.fermi_summary = []
+        self.is_processed = False      
 
-    score_folder_name = f'{indicator and (indicator + " ") or ""}Scores.csv' # prepend an optional indicator, so that files are not named the same (and can be viewed at the same time)
-    with open(save_dir/score_folder_name, 'w', newline='') as score_file: # open the score file and unpack scores by family                         
-        for family in families:
-            processed_scores = [(spec_sum.species, spec_sum.score) for spec_sum in species_summaries if spec_sum.family == family] 
-            if processed_scores: # only write scores if the family is actually present
-                processed_scores.sort(key=lambda x : get_carbon_ordering(x[0])) # zip scores together and order then by modified carbon number rules
-                #processed_scores.sort(key=lambda x : x[1], reverse=True) # zip scores together and sort in ascending order by score
-                processed_scores.append( ('AVERAGE', average(pair[1] for pair in processed_scores)) ) # score in second position (still bundled to preserve pairing)
-
+    def add_specsum(self, specsum):
+        self.scores[specsum.family].append((specsum.species, specsum.score))
+        self.fermi_summary.append(specsum.fermi_plot)
+        
+    def add_all_specsums(self, specsum_list):
+        '''The self.add() operation, but over a whole list instead, saves time and code'''
+        for specsum in specsum_list:
+            self.add_specsum(specsum)
+        
+    def process_specsums(self):
+        if self.is_processed: # do not reprocess data if processing has already been done (is time consuming and leads to data corruption)
+            return
+        else:
+            self.scores = {family : score_pairs for family, score_pairs in self.scores.items() if score_pairs} # remove any families with no members
+            for family, score_pairs in self.scores.items():
+                ordered_scores = sorted(score_pairs, key=lambda x : get_carbon_ordering(x[0])) # arrange scores entries by carbon ordering
+                self.scores[family] = {species : score for (species, score) in ordered_scores} # map to second-level dict
+                self.scores[family]['AVERAGE'] = average(self.scores[family].values()) # append the average value after sorting
+            self.is_processed = True # raise processed flag if all goes well
+        
+    def unpack_summaries(self, save_dir, indicator=''):
+        '''Takes a list of species summaries, unpacks them into score sheets and fermi plots summaries, and writes them to the relevant directory'''
+        self.process_specsums() # ensure results are properly processed before attempting unpacking
+        adagraph(self.fermi_summary, ncols=5, save_dir=save_dir/'Fermi Summary.png') # plot the fermi summary
+        
+        score_file_path = save_dir/f'{indicator}{bool(indicator)*" "}Scores.csv' # prepend an optional indicator, to differentiate files and allow them to be viewed at the same time
+        with score_file_path.open(mode='w', newline='') as score_file: # open the score file and unpack scores by family                         
+            for family, species_scores in self.scores.items(): # iterate through species score mapping (skips over omitted families)     
                 score_file.write(family) 
-                for name, score in processed_scores:
-                    score_file.write(f'\n{name}, {score}')
+                for species, score in species_scores.items():
+                    score_file.write(f'\n{species}, {score}')
                 score_file.write('\n\n')   # leave a gap between each family
+                
+class SummaryCollator:
+    '''Highest level of summary organization and unpacking, creates data-wide collated summaries for multiple data sets, slices, and familiar cyclings'''
+    def __init__(self):
+        self.collated_scores = {}
+        self.datafiles = [] # the word "data" will always be the first entry regardless (mainly as informative padding)
+        self.is_processed = False
+       
+    def add_famsum(self, famsum):
+        if famsum.source_file not in self.datafiles: # can do this naively because of the predictable cycling structure of the main PLATINUMS app
+            self.datafiles.append(famsum.source_file)
+            
+        if famsum.fam_status not in self.collated_scores: # for first entry, expand score values into lists which can be filled in
+            self.collated_scores[famsum.fam_status] = []
+        self.collated_scores[famsum.fam_status].append(famsum.scores)
+  
+    def add_all_famsums(self, famsum_list):
+        '''The self.add() operation, but over a whole list instead, saves time and code'''
+        for famsum in famsum_list:
+            self.add_famsum(famsum)
+            
+    def process_famsums(self):
+        if self.is_processed: # do not reprocess data if processing has already been done (is time consuming and leads to data corruption)
+            return
+        else:    
+            self.datafiles = ','.join(self.datafiles) + '\n' # merge the datafiles into a single string
+            for fam_status, fam_data in self.collated_scores.items(): # collapses species entries into lists, still placed under the appropraite families
+                self.collated_scores[fam_status] = {f'{family}\n' : [f'{species},{",".join(str(i) for i in scores)}\n' # turn score entry lists into easily writable strings
+                                                      for species, scores in dictmerge(spec_data).items()]    # riffle together species scores
+                                                        for family, spec_data in dictmerge(fam_data).items()} # riffle together family data
+        self.is_processed = True # raise processed flag if all goes well
+    
+    def unpack_summaries(self, save_dir, point_range): # use point range as indicator
+        self.process_famsums() # ensure score are already processed
+        file_path = save_dir/f'Compiled Results - {point_range}.csv'  # write separate collated results file for each point range
+        file_path.touch()
+        
+        with file_path.open(mode='w') as coll_file:
+            for fam_status, fam_data in self.collated_scores.items(): # write two separate blocks, for each set of familiars/unfamiliars
+                coll_file.write(f'{fam_status},{self.datafiles}')
+                for family, spec_scores in fam_data.items():
+                    coll_file.write(family)
+                    for scoreset in spec_scores:
+                        coll_file.write(scoreset)
+                    coll_file.write('\n') # leave gap between each family (will also separate familirs and unfamiliars)
