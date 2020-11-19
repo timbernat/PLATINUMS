@@ -145,11 +145,11 @@ class ToggleFrame(tk.LabelFrame):
 class LabelledEntry:
     '''An entry with an adjacent label to the right. Use "self.get_value()" method to retrieve state of
     variable. Be sure to leave two columns worth of space for this widget'''
-    def __init__(self, frame, text, var, state='normal', default=None, width=10, row=0, col=0):
+    def __init__(self, frame, text, var, state='normal', default=None, underline=None, width=10, row=0, col=0):
         self.default = default
         self.var = var
         self.reset_default()
-        self.label = tk.Label(frame, text=text, padx=2, state=state)
+        self.label = tk.Label(frame, text=text, padx=2, underline=underline, state=state)
         self.label.grid(row=row, column=col, sticky='w')
         self.entry = tk.Entry(frame, width=width, textvariable=self.var, state=state)
         self.entry.grid(row=row, column=col+1)
@@ -170,9 +170,9 @@ class LabelledEntry:
     
 class Switch: 
     '''An interactive switch button, clicking inverts the boolean state and status display. State can be accessed via the <self>.value attribute'''
-    def __init__(self, frame, text, default_value=False, dep_state='normal', dependents=None, width=10, 
+    def __init__(self, frame, text, default_value=False, dep_state='normal', dependents=None, underline=None, width=10, 
                  on_text='Enabled', on_color='green2', off_color='red', off_text='Disabled', row=0, col=0,):
-        self.label = tk.Label(frame, text=text)
+        self.label = tk.Label(frame, text=text, underline=underline)
         self.label.grid(row=row, column=col)
         self.switch = tk.Button(frame, width=width, command=self.toggle)
         self.switch.grid(row=row, column=col+1)
