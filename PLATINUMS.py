@@ -3,7 +3,7 @@ import iumsutils           # library of functions specific to my "-IUMS" class o
 import TimTkLib as ttl     # library of custom tkinter widgets I've written to make GUI assembly more straightforward 
 
 # Built-in Imports
-import json, os, shutil
+import json, os
 from time import time                      
 from pathlib import Path
 
@@ -228,7 +228,7 @@ class PLATINUMS_App:
         self.convergence_switch = ttl.Switch(self.param_frame, text='Convergence: ',underline=3, row=3, col=1)
 
         self.cycle_fams   = tk.BooleanVar()
-        self.cycle_button = tk.Checkbutton(self.param_frame, text='Cycle?', variable=self.cycle_fams)
+        self.cycle_button = tk.Checkbutton(self.param_frame, text='Cycle?', underline=1, variable=self.cycle_fams)
         self.cycle_button.grid(row=0, column=3, padx=1)
         
         self.upper_bound_entry = ttl.LabelledEntry(self.param_frame, text='Upper Bound:',    var=tk.IntVar(), default=500, row=4, col=0)
@@ -297,7 +297,7 @@ class PLATINUMS_App:
         target_button.tkraise()
     
     def key_in_input(self, event):
-        '''Hotkey binding wrapper for the input frame'''
+        '''Hotkey binding wrapper for all frames - ensures actions are only available when the parent frame is enabled'''
         if self.input_frame.state == 'normal': # do not allow hotkeys to work if frame is disabled
             if event.char in ('m', 'p'): # bindings for input modes
                 self.input_mode.set((event.char == 'm' and 'Manual Input' or 'Preset from File'))
@@ -322,6 +322,8 @@ class PLATINUMS_App:
                               'v' : self.convergence_switch}
             if event.char in switch_mapping:
                 switch_mapping[event.char].toggle() # make parameter switches toggleable with keyboard
+            elif event.char == 'y':
+                self.cycle_fams.set(not self.cycle_fams.get()) # invert cycling status
             elif event.char == 'p': # add hotkey to save preset and proceed...
                 self.confirm_tparams_and_preset()
             elif event.char == 'c': # or just to proceed
@@ -331,6 +333,10 @@ class PLATINUMS_App:
     
     def reset(self):
         '''reset the GUI to the opening state, along with all variables'''
+        for widget in self.main.winfo_children(): # close any TopLevel windows that may happen to be open when reset is hit (be it for selection or training)
+            if isinstance(widget, tk.Toplevel):
+                widget.destroy()
+        
         for tk_switch_var in (self.read_mode, self.input_mode, self.cycle_fams):
             tk_switch_var.set(0)
         
@@ -349,16 +355,16 @@ class PLATINUMS_App:
     # Frame 0 (Parameter Input) Methods
     def initial_input(self):
         '''Method called for initiating input (be it manual or from preset)'''
-        if self.input_mode.get() == 'Manual Input': # ensures that keybindings don't work when the frame is disabled
+        if self.input_mode.get() == 'Manual Input': 
             self.parameters['data_files'] = [] # ensure a list exists AND is empty when selecting files
             ttl.SelectionWindow(self.main, self.input_frame, sorted(iumsutils.get_by_filetype('.json', self.data_path)),
                                 self.parameters['data_files'], window_title='Select data file(s) to train over', ncols=4)    
             
-        elif self.input_mode.get() == 'Preset from File': # ensures that keybindings don't work when the frame is disabled
+        elif self.input_mode.get() == 'Preset from File': 
             preset_path = Path(filedialog.askopenfilename(title='Choose Training Preset', initialdir='./Training Presets', filetypes=(('JSONs', '*.json'),) ))
-            try: # NOTE: scope looks a bit odd but is correct, do not change indentation of try/excepts
-                with preset_path.open() as preset_file:
-                    self.parameters = json.load(preset_file) # load in the parameter preset (ALL settings)     
+            try: 
+                with preset_path.open() as preset_file: # load in the parameter preset (ALL settings)   
+                    self.parameters = json.load(preset_file)   
             except PermissionError: # do nothing if user cancels selection
                 self.input_mode.set(0) 
                              
@@ -442,7 +448,7 @@ class PLATINUMS_App:
         for hp_entry, param in self.hp_entry_mapping.items():
             self.parameters[param] = hp_entry.get_value()  
         self.isolate(self.param_frame)
-        self.convergence_switch.disable()   # ensures that the trimming menu stays greyed out, not necessary for the other switches 
+        self.convergence_switch.disable()  
      
     # Frame 3 (training parameter) Methods
     def check_trimming_bounds(self):
@@ -562,7 +568,7 @@ class PLATINUMS_App:
             for familiar_cycling in range(1 + cycle_fams):    
                 start_time = time() # log start time of each cycle, so that training duration can be computed afterwards  
                 
-                fam_training = (self.parameters['fam_training'] | familiar_cycling) # xor used to encode the inversion behavior on second cycle          
+                fam_training = (self.parameters['fam_training'] ^ familiar_cycling) # xor used to encode the inversion behavior on second cycle    
                 fam_str = f'{fam_training and "F" or "Unf"}amiliar'  
                 self.fam_switch.apply_state(fam_training)        # purely cosmetic, but allows the user to see that cycling is in fact occurring
                 train_window.set_familiar_status(fam_str)
@@ -606,9 +612,9 @@ class PLATINUMS_App:
 
                             with tf.device('CPU:0'):     # eschews the requirement for a brand-new NVIDIA graphics card (which we don't have anyways)                      
                                 model = Sequential()     # model block is created, layers are added to this block
-                                model.add(Dense(128, input_dim=(upper_bound - lower_bound), activation='relu'))  # 512 neuron input layer, size depends on trimming
+                                model.add(Dense(256, input_dim=(upper_bound - lower_bound), activation='relu'))  # 512 neuron input layer, size depends on trimming
                                 model.add(Dropout(0.5))                                          # dropout layer, to reduce overfit
-                                model.add(Dense(128, activation='relu'))                         # 512 neuron hidden layer
+                                model.add(Dense(256, activation='relu'))                         # 512 neuron hidden layer
                                 model.add(Dense(len(self.family_mapping), activation='softmax')) # softmax gives probability distribution of identity over all families
                                 model.compile(loss='categorical_crossentropy', optimizer=Adam(lr=learnrate), metrics=['accuracy']) 
 
@@ -664,7 +670,7 @@ class PLATINUMS_App:
         
         # POST-TRAINING WRAPPING-UP
         for point_range, collator in self.family_summaries.items():
-                    collator.unpack_summaries(save_dir=parent_folder, point_range=point_range) # produce collated results in the main folder for ease of reference
+            collator.unpack_summaries(save_dir=parent_folder, point_range=point_range) # produce collated results in the main folder for ease of reference
                 
         train_window.button_frame.enable()  # open up post-training options in the training window
         train_window.abort_button.configure(state='disabled') # disable the abort button (idiotproofing against its use after training)
