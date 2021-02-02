@@ -1,5 +1,6 @@
 # Custom Imports
 import iumsutils           # library of functions specific to my "-IUMS" class of MS Neural Network applications
+import plotutils           # library of plotting utilities useful for summarizing and visualizing training results
 import TimTkLib as ttl     # library of custom tkinter widgets I've written to make GUI assembly more straightforward 
 
 # Built-in Imports
@@ -175,8 +176,7 @@ class PLATINUMS_App:
     def __init__(self, main):       
     #Main Window
         self.main = main
-        self.main.title('PLATINUMS 5.1.1-alpha')
-        #self.main.geometry('445x417')
+        self.main.title('PLATINUMS 5.9.0-alpha')
         self.parameters = {}
         
         self.data_path, self.save_path = Path('TDMS Datasets'), Path('Saved Training Results') # specify here which folders to read data and save results to, respectively
@@ -245,14 +245,13 @@ class PLATINUMS_App:
         self.activation_frame = ttl.ToggleFrame(self.main, text='', padx=0, pady=0, row=5)   
         self.train_button = tk.Button(self.activation_frame, text='TRAIN', padx=22, width=44, bg='deepskyblue2', underline=0, command=self.training)
         self.train_button.grid(row=0, column=0)
-        self.family_summaries = {}
         
         self.pred_button = tk.Button(self.activation_frame, text='PREDICT', padx=22, width=44, bg='mediumorchid2', state='disabled', command=lambda:None)
         self.pred_button.grid(row=0, column=0)
         self.switch_tpmode()
          
     # Packaging together some widgets and attributes, for ease of reference (also useful for self.reset() and self.isolate() methods)
-        self.arrays   = (self.parameters, self.species, self.families, self.family_mapping, self.family_summaries) 
+        self.arrays   = (self.parameters, self.species, self.families, self.family_mapping) 
         self.frames   = (self.input_frame, self.selection_frame, self.hyperparam_frame, self.param_frame, self.activation_frame)
 
         self.switch_mapping = {self.fam_switch : 'fam_training',
@@ -381,15 +380,15 @@ class PLATINUMS_App:
         else: # checking whether properties match across multiple selected data files; if they do, that simplifies much of the subsequent control flow
             self.main.config(cursor='wait') # this make take a moment for large sets of files, indicate to user (via cursor) to be patient
             for i, file in enumerate(self.parameters['data_files']):
-                with (self.data_path/f'{file}.json').open() as json_file:
-                    json_data = json.load(json_file)
-                    if i == 0: # flag the first file read differently, for comparison with all others (moot in the case of a single file)
-                        initial_data = json_data
-                    else:
-                        for data_property in ('spectrum_size', 'species', 'families', 'family_mapping'): # requires counter for comparision, since order may differ
-                            if json_data[data_property] != initial_data[data_property]: # relies on list properties in jsons being sorted identically (avoids comparison via Counter) 
-                                messagebox.showerror('Property Mismatch', f'Attribute "{data_property}" in {file} does not match that of the other files chosen')
-                                return
+                json_data = iumsutils.load_chem_json(self.data_path/f'{file}.json')
+                if i == 0: # flag the first file read differently, for comparison with all others (moot in the case of a single file)
+                    initial_data = json_data
+                else:
+                    for data_property in ('spectrum_size', 'species', 'families', 'family_mapping'): # requires counter for comparision, since order may differ
+                        if json_data[data_property] != initial_data[data_property]: # relies on list properties in jsons being sorted identically (avoids comparison via Counter) 
+                            self.main.config(cursor='') # return cursor to normal
+                            messagebox.showerror('Property Mismatch', f'Attribute "{data_property}" in {file} does not match that of the other files chosen')
+                            return
             else: # if no errors are thrown (i.e. the specified properties match through all the chosen sets), read in the properties (can remain constant by definition)
                 self.species        = initial_data['species']
                 self.families       = initial_data['families']
@@ -492,8 +491,7 @@ class PLATINUMS_App:
         '''The function defining the neural network training sequence and parameters'''
         # UNPACKING INTERNAL PARAMETERS DICT AND INITIALIZING SOME VALUES
         overall_start_time = time() # get start of runtime for entire training routine
-        iumsutils.SpeciesSummary.family_mapping = self.family_mapping # use the current mapping for producing summaries later
-        iumsutils.FamilySummary.families = self.families # use the current set of families for producing dataset-wide summaries later
+        plotutils.Base_RC.unit_circle = plotutils.Mapped_Unit_Circle(self.family_mapping) # set mapping for radar charts
         
         selections      = self.parameters['selections']
         num_epochs      = self.parameters['num_epochs'] 
@@ -540,8 +538,9 @@ class PLATINUMS_App:
                         messagebox.showerror('Overwrite Error!', f'{parent_folder}\nhas file(s) open and cannot be overwritten;\n\nPlease close all files and try training again')
                 self.activation_frame.enable()
                 return # final return branch executed in all cases except where user allows overwrite AND it is successful
-            
-        with open(parent_folder/'Training Preset.json', 'w') as preset_file: 
+        
+        preset_path = parent_folder/'Training Preset.json'
+        with preset_path.open(mode='w') as preset_file: 
             json.dump(self.parameters, preset_file) # save current training settings to a preset for reproducability
             
         self.activation_frame.disable()     # disable training button while training (an idiot-proofing measure)                 
@@ -561,8 +560,7 @@ class PLATINUMS_App:
             results_folder = Path(parent_folder, f'{data_file} Results') # main folder with all results for a particular data file  
             results_folder.mkdir(exist_ok=True)        
 
-            with (self.data_path/f'{data_file}.json').open() as json_file: # read in new chem_data for each file in the training queue
-                chem_data = [iumsutils.Instance(*properties) for properties in json.load(json_file)['chem_data']] # unpack data into Instance object
+            chem_data = iumsutils.load_chem_json(self.data_path/f'{data_file}.json')['chem_data'] # load in instance data from the dataset
 
             # SECONDARY TRAINING LOOP, REGULATES CYCLING BETWEEN FAMILIARS AND UNFAMILIARS
             for familiar_cycling in range(1 + cycle_fams):    
@@ -588,12 +586,17 @@ class PLATINUMS_App:
                     train_window.set_slice(point_range)
                     curr_slice_folder = curr_fam_folder/point_range
                     curr_slice_folder.mkdir(exist_ok=True)
-                    
-                    if not self.family_summaries.get(point_range):
-                        self.family_summaries[point_range] = iumsutils.SummaryCollator()
 
                     # INNERMOST TRAINING LOOP, CYCLES THROUGH ALL THE SELECTED EVALUANDS
-                    family_summary = iumsutils.FamilySummary(data_file, fam_str)
+                    predictions, round_summary = [
+                        {family : 
+                            {species : {}
+                                for species in sorted((species for species in selections if iumsutils.get_family(species) == family), key=iumsutils.get_carbon_ordering)
+                            }
+                            for family in sorted(set(iumsutils.get_family(species) for species in selections))
+                        } 
+                    for i in range(2)]  # outer data structure is the same for both predictions and the round summary
+                    
                     for evaluand_idx, evaluand in enumerate(selections):                  
                         train_window.set_status('Training...')
                         train_window.round_progress.increment() 
@@ -620,7 +623,7 @@ class PLATINUMS_App:
 
                             hist = model.fit(x_train, y_train, validation_data=(x_test, y_test), callbacks=keras_callbacks, # actual model training occurs here
                                              verbose=keras_verbosity, epochs=num_epochs, batch_size=batchsize)
-                            test_loss, test_acc = model.evaluate(x_test, y_test, verbose=keras_verbosity)  # keras' self evaluation of loss and accuracy metric
+                            final_evals = model.evaluate(x_test, y_test, verbose=keras_verbosity)  # keras' self evaluation of loss and accuracy metric
 
                             if early_stopping and early_stopping_callback.stopped_epoch: # if early stopping has indeed been triggered:
                                 train_window.epoch_progress.set_max(early_stopping_callback.stopped_epoch + 1) # set progress max to stopped epoch, to indicate that training is done   
@@ -648,30 +651,53 @@ class PLATINUMS_App:
                             train_window.button_frame.enable()
                             return # without a return, aborting training only pauses one iteration of loop
 
-                        # CREATION OF THE SPECIES SUMMARY OBJECT FOR THE CURRENT EVALUAND, PLOTTING OF EVALUATION RESULTS FOR THE CURRENT EVALUAND                
-                        curr_spec_sum = iumsutils.SpeciesSummary(evaluand) # SpeciesSummary objects handle calculation and plotting of individual evaluand results
-                        curr_spec_sum.add_all_insts(eval_titles, model.predict(np.array(eval_spectra))) # channel the instance names and predictions into the summary and process them
-                        
+                        # CREATION OF THE SPECIES SUMMARY OBJECT FOR THE CURRENT EVALUAND, PLOTTING OF EVALUATION RESULTS FOR THE CURRENT EVALUAND 
                         train_window.set_status('Plotting Results to Folder...')
-                        extra_plots = [iumsutils.BundledPlot(eval_spectra, f'PWA of {evaluand}', x_data=range(lower_bound, upper_bound), plot_type='v'),
-                                       iumsutils.BundledPlot(hist.history['loss'], f'Training Loss (Final={test_loss:0.2f})', plot_type='m'), 
-                                       iumsutils.BundledPlot(hist.history['accuracy'], f'Training Accuracy (Final={test_acc:0.2f})', plot_type='m')]
-                        curr_spec_sum.graph(curr_slice_folder/evaluand, prepended_plots=extra_plots) # results are also processed before graphing (two birds with one stone)
-                        family_summary.add_specsum(curr_spec_sum) # collect all the species summaries for this slice, unpack them after the end of the slice
 
-                    # DISTRIBUTION OF SUMMARY DATA TO APPROPRIATE RESPECTIVE FOLDERS 
-                    train_window.set_status(f'Compiling Scores and Fermi Summary...')
-                    family_summary.unpack_summaries(save_dir=curr_slice_folder, indicator=fam_str)
-                    self.family_summaries[point_range].add_famsum(family_summary) # pack together family summaries under the collator object for the current slice
+                        for inst_name, pred in zip(eval_titles, model.predict(np.array(eval_spectra))): # file predictions into dict
+                            predictions[curr_family][evaluand][inst_name] = [float(i) for i in pred] # convert to list of floats for JSON serialization 
+                        
+                        # obtain and file current evaluand score, plotting summary graphics in the process; overwrites empty dictionary
+                        round_summary[curr_family][evaluand] = plotutils.plot_and_get_score(evaluand, eval_spectra, predictions, hist.history['loss'],
+                                                                                             hist.history['accuracy'],final_evals, savedir=curr_slice_folder)                
+                    # CALCULATION AND PROCESSING OF RESULTS TO PRODUCE SCORES AND SUMMARIES 
+                    train_window.set_status(f'Unpacking Scores...')
+                    
+                    row_labels, score_list = [], []
+                    for family, species_scores in round_summary.items(): # iterate through species score mapping (skips over omitted families)     
+                        row_labels.append(family)
+                        score_list.append(' ') # skip line in score column
+                        
+                        species_scores['AVERAGE'] = iumsutils.average(species_scores.values()) # compute and append average score to each
+                        for species, score in species_scores.items():
+                            row_labels.append(species)
+                            score_list.append(score)
+                        row_labels.append(' ')   # leave a gap between each family
+                                      
+                    # WRITING/PLOTTING RESULTS TO FILES
+                    train_window.set_status(f'Outputting Summaries of Results...')
+                    
+                    prediction_path = curr_slice_folder/'Prediction Values.json'
+                    with prediction_path.open(mode='w', newline='') as pred_file:
+                        json.dump(predictions, pred_file) # save the aavs for the current training
+
+                    plotutils.single_plot(plotutils.Overlaid_Family_RC(predictions), curr_slice_folder/'Overall Summary') # save family-overlaid RC as visual result summary
+                           
+                    score_file_path = curr_slice_folder/f'{fam_str} Scores.csv'
+                    iumsutils.add_csv_column(score_file_path, row_labels)
+                    iumsutils.add_csv_column(score_file_path, score_list)
+                    
+                    comp_path = parent_folder/f'Compiled Results - {point_range}, {fam_str}.csv' # path to the relevant compiled results folder
+                    if not comp_path.exists():
+                        iumsutils.add_csv_column(comp_path, ['Datasets:'] + row_labels) # if the relevant file doesn't exists, make it and add row labels
+                    iumsutils.add_csv_column(comp_path, [data_file] + score_list) # add a column with the current scores, along with a dataset label, to the collated csv
                 
+                # LOGGING THE DURATION OF TRAINING OVER EACH DATASET
                 with log_file_path.open(mode='a') as log_file:  # log the time taken to complete the training cycle (open in append mode to prevent overwriting)
                     model.summary(print_fn=lambda x : log_file.write(f'{x}\n')) # write model to log file (since model is same throughout, should only write model on the last pass)
                     log_file.write(f'\nTraining Time : {iumsutils.format_time(time() - start_time)}') # log the time taken for this particular training session as well
         
-        # POST-TRAINING WRAPPING-UP
-        for point_range, collator in self.family_summaries.items():
-            collator.unpack_summaries(save_dir=parent_folder, point_range=point_range) # produce collated results in the main folder for ease of reference
-                
+        # POST-TRAINING WRAPPING-UP         
         train_window.button_frame.enable()  # open up post-training options in the training window
         train_window.abort_button.configure(state='disabled') # disable the abort button (idiotproofing against its use after training)
         train_window.set_status(f'Finished in {iumsutils.format_time(time() - overall_start_time)}') # display the time taken for all trainings in the training window
