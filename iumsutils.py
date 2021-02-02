@@ -1,6 +1,5 @@
-import math, re
+import csv, json, re, collections
 from pathlib import Path
-import matplotlib.pyplot as plt
  
 # utilities specifically written to avoid having to import entire modules for a single object's functionality
 def average(iterable, precision=4): 
@@ -12,30 +11,23 @@ def average(iterable, precision=4):
     avg = isum/n
     return (precision and round(avg, precision) or avg)
 
-def standard_dev(iterable): # eventually make this use a more computationally efficient stdev formula
-    '''Calculate the standard deviation of an iterable'''
-    avg = average(iterable)  # done to avoid repeated calculation of average for every term
-    return (sum((i - avg)**2 for i in iterable)/len(iterable))**0.5
-
 def format_time(sec):
     '''Converts a duration in seconds into an h:mm:ss string; written explicitly to avoid importing datetime.timedelta'''
     minutes, seconds = divmod(round(sec), 60)
     hours, minutes = divmod(minutes, 60)
     return f'{hours:d}:{minutes:02d}:{seconds:02d}'
 
-def counter(iterable):
-    '''Takes an iterable and returns a dict of the number of occurrences of each item; written explicitly to avoid importing collections.Counter'''
-    counts = {}
-    for item in iterable:
-        counts[item] = counts.get(item, 0) + 1
-    return counts
+def ceildiv(a, b):
+    '''Ceiling analogue of floor division operator, meant to avoid importing math'''
+    return -(a // -b)
         
+    
 # some general-purpose utilities
 def ordered_and_counted(iterable):
     '''Takes an iterable of items and returns a sorted set of the items, and a dict of the counts of each item
     Specifically useful for getting the listing and counts of both species and families when jsonizing or transforming'''
     data = [i for i in iterable] # temporarily store data, in the case that the iterable is a generator
-    return sorted(set(data)), counter(data)
+    return sorted(set(data)), collections.Counter(data)
 
 def normalized(iterable):
     '''Normalize an iterable using min-max feature scaling (casts all values between 0 and 1)'''
@@ -48,6 +40,10 @@ def dictmerge(dictlist):
     '''Takes a list of dictionaries with identical keys and combines them into a single dictionary with the values combined into lists under each entry'''
     return {key : [subdict[key] for subdict in dictlist] for key in dictlist[0]}
 
+def multikey(some_dict, keyset):
+    '''Takes a dictionary and an iterable of keys and returns Bool of whether or not the dict contains ALL of the listed keys'''
+    return all(key in some_dict for key in keyset)
+
 def one_hot_mapping(iterable):
     '''Takes and iterable and returns a dictionary of the values in the iterable, assigned sequentially to one-hot vectors
     each of which is the length of the iterable (akin to an identity matrix)'''
@@ -58,32 +54,7 @@ def get_RIP(mode1_spectrum):
     '''Naive but surprisingly effective method for identifying the RIP value for Mode 1 spectra'''
     return max(mode1_spectrum[:len(mode1_spectrum)//2]) # takes the RIP to be the maximum value in the first half of the spectrum
 
-#file and path utilities
-def get_by_filetype(extension, path=Path.cwd()):  
-    '''Get all files of a particular file type present in a given directory, (the current directory by default)'''
-    if type(path) == str:
-        path = Path(path) # convert any string input (i.e. just the name) into Path object
-    
-    filetypes_present = tuple(file.stem for file in path.iterdir() if file.suffix == extension)
-    if filetypes_present == ():
-        filetypes_present = (None,)
-    return filetypes_present
-
-def clear_folder(path):
-    '''Clear out the contents of a folder. A more tactful approach than without deleting the folder and remaking it'''
-    if not path.is_dir():
-        raise ValueError(f'{path} does not point to a folder')
-    
-    for file in path.iterdir():
-        if file.is_dir():
-            clear_folder(file) # recursively clear any subfolders, as path can only delete empty files
-            try:
-                file.rmdir()
-            except OSError: # meant for the case where the file won't be deleted because the user is still inside it
-                raise PermissionError # convert to permission error (which my file checkers are built to handle)
-        else:
-            file.unlink()
-
+            
 # utilities for handling instance naming and information packaging
 def sort_instance_names(name_list, data_key=lambda x:x):
     '''Sorts a a list of instance names in ascending order based on the tailing digits. Optional "key" arg for when some operation is needed to return the name (e.g. Instance.name)'''
@@ -123,219 +94,150 @@ def get_carbon_ordering(species):
                        'hex'  : 6,
                        'hept' : 7,
                        'oct'  : 8,
-                       'non(?!e)'  : 9, # prevents all ketones from being assigned "9"
+                       'non(?!e)' : 9, # prevents all ketones from being assigned "9"
                        'dec'  : 10}
     for affix, number in iupac_numbering.items():
         if re.search(f'(?i){affix}', species): # ignore capitalization (finds affix anywhere in word)
             return number + 0.5*bool(re.search(f'(?i)(iso|sec-){affix}', species)) # places "iso" and "sec-" compounds slightly lower on the list (+0.5, between compounds)
     else:
         return 100 # arbitrary, needs to return a number much greater than the rest to be placed at end
-    
+
+Instance = collections.namedtuple('Instance', ['name', 'species', 'family', 'spectrum', 'vector']) # provide class=like encoding of instances
+'''
 class Instance:
-    '''A single instance of a particular chemical, useful for storing and accessing chemical and spectral information during training and transformations '''
+    #A single instance of a particular chemical, useful for storing and accessing chemical and spectral information during training and transformations
     def __init__(self, name, species, family, spectrum, vector):
         self.name     = name
         self.species  = species
         self.family   = family
         self.spectrum = spectrum
         self.vector   = vector
+    '''        
         
-# utilities for plotting and for processing summary data post-training
-class BundledPlot:
-    '''Helper class for adagraph, makes it easier to package data which is to be plotted'''
-    valid_plot_types = ('s', 'm', 'f', 'p', 'v')
+#file and path utilities
+def sanitized_path(path, ext='.json'):
+    '''Ensures that a specified path is a Pathlike object and has the proper file extension'''
+    if type(path) == str:
+        path = Path(path) # ensure path is a Path object, allows for string input
     
-    def __init__(self, data, title, plot_type='s', x_data=None): # s (for standard or spectrum) is the default plot type
-        if plot_type not in self.valid_plot_types:
-            raise ValueError('Invalid plot type specified')
+    if path.suffix != ext:
+        raise TypeError(f'Input must be a(n) {ext} file')
+    else:
+        return path
 
-        self.plot_type = plot_type
-        if self.plot_type == 'v': # special cases needed for calculating pointwise aggregate variation plots
-            self.data = [tuple(map(funct, zip(*data))) for funct in (min, average, max)]
-            self.x_data = (x_data and x_data or range(len(data[0]))) # if no x_data is specified, default to just range over number of points
-        else:
-            self.data  = data # otherwise, leave data as is
-            self.x_data = (x_data and x_data or range(len(data))) # if no x_data is specified, default to just range over data 
-            
-        self.title = title 
-        # eventually, add marker defaults + customization
-        
-def adagraph(plot_list, ncols=6, save_dir=None, display_size=20):  # consider adding axis labels
-        '''a general tidy internal graphing utility of my own devising, used to produce all manner of plots during training with one function'''
-        nrows = math.ceil(len(plot_list)/ncols)  #  determine the necessary number of rows needed to accomodate the data
-        fig, axs = plt.subplots(nrows, ncols, figsize=(display_size, display_size * nrows/ncols)) 
-        
-        for idx, plot in enumerate(plot_list):                         
-            if nrows > 1:                        # locate the current plot, unpack linear index into coordinate
-                row, col = divmod(idx, ncols)      
-                curr_plot = axs[row][col]  
-            else:                                # special case for indexing plots with only one row; my workaround of implementation in matplotlib
-                curr_plot = axs[idx]    
-            curr_plot.set_title(plot.title)
-            
-            # specifying plot conditions by plot type
-            if plot.plot_type == 's':                 # for plotting spectra or just generic plots
-                curr_plot.plot(plot.x_data, plot.data, 'c-') 
-            elif plot.plot_type == 'm':               # for plotting neural netwrok training metrics 
-                curr_plot.plot(plot.x_data, plot.data, ('Loss' in plot.title and 'r-' or 'g-')) 
-            elif plot.plot_type == 'f':               # for plotting fermi-dirac plots
-                curr_plot.plot(plot.x_data, plot.data, 'm-')  
-                curr_plot.set_ylim(0, 1.05)
-            elif plot.plot_type == 'p':               # for plotting predictions
-                curr_plot.bar(plot.x_data, plot.data, color=('Summation' in plot.title and 'r' or 'b'))  # unpacking accounts for column labels by family for predictions
-                curr_plot.set_ylim(0,1)
-                curr_plot.tick_params(axis='x', labelrotation=45)
-            elif plot.plot_type == 'v':               # for plotting variational summary/noise plots
-                (minima, averages, maxima) = plot.data
-                curr_plot.set_xlabel('Point Number')
-                curr_plot.set_ylabel('Intensity')
-                curr_plot.plot(plot.x_data, maxima, 'b-', plot.x_data, averages, 'r-', plot.x_data, minima, 'g-') 
-                curr_plot.legend(['Maximum', 'Average', 'Minimum'], loc='upper left')
-        plt.tight_layout()
-        if not save_dir: # consider adding a show AND plot option, not at all necessary now, however
-            plt.show()
-        else:
-            plt.savefig(save_dir)
-        plt.close('all')
-              
-class SpeciesSummary:
-    '''Helper class for processing raw name-prediction data into species-based plots, scores, fermi data, and other useful information'''
-    family_mapping = None # class variable, set for all SpeciesSummary objects prior to use
-    
-    def __init__(self, species):
-        if not self.family_mapping: # requires a class-wide mapping for ease of functionality
-            raise ValueError('SpeciesSummary.family_mapping has not been instantiated')
-        
-        self.species = species
-        self.family = get_family(species)
-        self.hotbit = self.family_mapping[self.family].index(1)
-        self.inst_mapping = {}
-        
-        self.score = None
-        self.fermi_plot = None
-        self.summation_plot = None
-        
-    def add_inst(self, name, pred):
-        if isolate_species(name) == self.species:
-            self.inst_mapping[name] = pred
-        else:
-            return # don't add instances that are of a different species to the prediction registry
-        
-    def add_all_insts(self, name_list, predictions):
-        '''The self.add() operation, but over two whole lists instead, saves time and code'''
-        for name, pred in zip(name_list, predictions):
-            self.add_inst(name, pred)
-            
-    def process_insts(self):
-        '''Compute the species score and assemble the fermi and summation plots''' 
-        predictions = self.inst_mapping.values()
-        corr_array = [max(pred) == pred[self.hotbit] for pred in predictions]
-        self.score = average(corr_array)          
-        self.summation_plot = BundledPlot([average(column) for column in zip(*predictions)], 'Standardized Summation', plot_type='p', x_data=self.family_mapping.keys())
+def load_chem_json(source_path):
+    '''Read a chemical data json, de-serializes the Instance objects from "chem_data", and return the contents of the file'''
+    source_path = sanitized_path(source_path)
+    with source_path.open(mode='r') as source_file:
+        json_data = json.load(source_file) # this comment is a watermark - 2020, timotej bernat
+        json_data['chem_data'] = [Instance(*properties) for properties in json_data['chem_data']] # unpack the properties into Instance objects
+    return json_data
 
-        fermi_data = normalized( sorted((pred[self.hotbit] for pred in predictions), reverse=True) )
-        fermi_title = f'{self.species}, {sum(corr_array)}/{len(corr_array)} correct'
-        self.fermi_plot = BundledPlot(fermi_data, fermi_title, plot_type='f')
+def jsonize(source_path, correct_names=False): 
+    '''Process spectral data csvs, generating labels, vector mappings, species counts, and other information,
+    then cast the data to a json for ease of data reading in other applications and methods'''
+    source_path = sanitized_path(source_path, ext='.csv')
+    rep_flags = {'MIBK' : 'Methyl-iBu-Ketone', # dictionary of names to flag and replace to ensure total consistency of naming between files
+                'Propanol' : '1-Propanol',     # add flags as they come up, these are the ones for Modes 1-3 I've come across so far
+                'Butanol'  : '1-Butanol',
+                'Pentanol' : '1-Pentanol',
+                'Hexanol'  : '1-Hexanol',
+                'Heptanol' : '1-Heptanol',
+                'Octanol'  : '1-Octanol',
+                'IsoButanol'  : 'Isobutanol',
+                'Iso-Butanol' : 'Isobutanol',
+                'Sec Butyl Acetate' : 'Sec-Butyl Acetate',
+                'Secbutyl Acetate'  : 'Sec-Butyl Acetate'} 
+    temp_dict = {}
+    with source_path.open() as csv_file:
+        for row in csv.reader(csv_file):
+            name, spectrum = row[0], [float(i) for i in row[1:]] # isolate the instance name and spectrum for ease of reference
+            if correct_names:
+                species = isolate_species(name) # regex only replaces if string occurs at beginning (to avoid the "2-1-Propanol" bug)
+                name = re.sub(f'\A{species}', rep_flags.get(species, species), name) # replaced string will only be different if it appears in the flags dict     
 
-    def graph(self, save_dir=None, ncols=6, prepended_plots=[]):
-        '''Produce the result plot collection for the species'''
-        if not self.fermi_plot:
-            self.process_insts() # process instances if it has not already been done
-        instance_plots = [BundledPlot(data, name, plot_type='p', x_data=self.family_mapping.keys()) # bundle the name-prediction pairs into my custom plot objects
-                          for name, data in sort_instance_names(self.inst_mapping.items(), data_key=lambda x:x[0])] # ensure data is in ascending order by name
-        
-        plot_list = [*prepended_plots, self.fermi_plot, self.summation_plot, *instance_plots]
-        adagraph(plot_list, ncols=ncols, save_dir=save_dir) 
-
-class FamilySummary:
-    '''Helper class for lumping together the SpeciesSummary objects from a given dataset into score sheets and fermi summaries. Used as well for autocollation'''
-    families = None # class variable, set for all FamilyMapping objects prior to use
-    
-    def __init__(self, source_file, fam_status):
-        if not self.families:
-            raise ValueError('FamilySummary.families has not been instantiated')
-            
-        self.source_file = source_file
-        self.fam_status  = fam_status
-    
-        self.scores = {family : [] for family in self.families}        
-        self.fermi_summary = []
-        self.is_processed = False      
-
-    def add_specsum(self, specsum):
-        self.scores[specsum.family].append((specsum.species, specsum.score))
-        self.fermi_summary.append(specsum.fermi_plot)
-        
-    def add_all_specsums(self, specsum_list):
-        '''The self.add() operation, but over a whole list instead, saves time and code'''
-        for specsum in specsum_list:
-            self.add_specsum(specsum)
-        
-    def process_specsums(self):
-        if self.is_processed: # do not reprocess data if processing has already been done (is time consuming and leads to data corruption)
-            return
-        else:
-            self.scores = {family : score_pairs for family, score_pairs in self.scores.items() if score_pairs} # remove any families with no members
-            for family, score_pairs in self.scores.items():
-                ordered_scores = sorted(score_pairs, key=lambda x : get_carbon_ordering(x[0])) # arrange scores entries by carbon ordering
-                self.scores[family] = {species : score for (species, score) in ordered_scores} # map to second-level dict
-                self.scores[family]['AVERAGE'] = average(self.scores[family].values()) # append the average value after sorting
-            self.is_processed = True # raise processed flag if all goes well
-        
-    def unpack_summaries(self, save_dir, indicator=''):
-        '''Takes a list of species summaries, unpacks them into score sheets and fermi plots summaries, and writes them to the relevant directory'''
-        self.process_specsums() # ensure results are properly processed before attempting unpacking
-        adagraph(self.fermi_summary, ncols=5, save_dir=save_dir/'Fermi Summary.png') # plot the fermi summary
-        
-        score_file_path = save_dir/f'{indicator}{bool(indicator)*" "}Scores.csv' # prepend an optional indicator, to differentiate files and allow them to be viewed at the same time
-        with score_file_path.open(mode='w', newline='') as score_file: # open the score file and unpack scores by family                         
-            for family, species_scores in self.scores.items(): # iterate through species score mapping (skips over omitted families)     
-                score_file.write(family) 
-                for species, score in species_scores.items():
-                    score_file.write(f'\n{species}, {score}')
-                score_file.write('\n\n')   # leave a gap between each family
+            try: # error checking to ensure all spectra are of the same size - based entirely on the first spectrum's length
+                if len(spectrum) != spectrum_size: 
+                    raise ValueError(f'Spectrum of {name} is of different length to the others')
+            except NameError: # take spectrum_size to be the length of the first spectrum encountered (in that case, spectrum_size is as yet unassigned)
+                spectrum_size = len(spectrum)
                 
-class SummaryCollator:
-    '''Highest level of summary organization and unpacking, creates data-wide collated summaries for multiple data sets, slices, and familiar cyclings'''
-    def __init__(self):
-        self.collated_scores = {}
-        self.datafiles = [] # the word "data" will always be the first entry regardless (mainly as informative padding)
-        self.is_processed = False
-       
-    def add_famsum(self, famsum):
-        if famsum.source_file not in self.datafiles: # can do this naively because of the predictable cycling structure of the main PLATINUMS app
-            self.datafiles.append(famsum.source_file)
-            
-        if famsum.fam_status not in self.collated_scores: # for first entry, expand score values into lists which can be filled in
-            self.collated_scores[famsum.fam_status] = []
-        self.collated_scores[famsum.fam_status].append(famsum.scores)
-  
-    def add_all_famsums(self, famsum_list):
-        '''The self.add() operation, but over a whole list instead, saves time and code'''
-        for famsum in famsum_list:
-            self.add_famsum(famsum)
-            
-    def process_famsums(self):
-        if self.is_processed: # do not reprocess data if processing has already been done (is time consuming and leads to data corruption)
-            return
-        else:    
-            self.datafiles = ','.join(self.datafiles) + '\n' # merge the datafiles into a single string
-            for fam_status, fam_data in self.collated_scores.items(): # collapses species entries into lists, still placed under the appropraite families
-                self.collated_scores[fam_status] = {f'{family}\n' : [f'{species},{",".join(str(i) for i in scores)}\n' # turn score entry lists into easily writable strings
-                                                      for species, scores in dictmerge(spec_data).items()]    # riffle together species scores
-                                                        for family, spec_data in dictmerge(fam_data).items()} # riffle together family data
-        self.is_processed = True # raise processed flag if all goes well
+            temp_dict[name] = spectrum # if all checks and corrections are passed, map the name to the spectrum
     
-    def unpack_summaries(self, save_dir, point_range): # use point range as indicator
-        self.process_famsums() # ensure score are already processed
-        file_path = save_dir/f'Compiled Results - {point_range}.csv'  # write separate collated results file for each point range
-        file_path.touch()
+    species, species_count = ordered_and_counted(isolate_species(instance) for instance in temp_dict.keys())
+    families, family_count = ordered_and_counted(get_family(instance) for instance in temp_dict.keys())      
+    family_mapping = one_hot_mapping(families)  # dict of onehot mapping vectors by family   
+    chem_data = [(name, isolate_species(name), get_family(name), spectrum, family_mapping[get_family(name)]) for name, spectrum in temp_dict.items()] 
+    
+    packaged_data = {   # package all the data into a single dict for json dumping
+        'chem_data' : chem_data,
+        'species'   : species,
+        'families'  : families,
+        'family_mapping' : family_mapping,
+        'spectrum_size'  : spectrum_size,
+        'species_count'  : species_count,
+        'family_count'   : family_count
+    }
+    
+    dest_path = source_path.parent/f'{source_path.stem}{correct_names and "(@)" or ""}.json' # add indicator to target name if correcting names
+    dest_path.touch() # create the new file
+    with dest_path.open(mode='w') as json_file:
+        json.dump(packaged_data, json_file) # dump our data into a json file with the same name as the original datacsv
         
-        with file_path.open(mode='w') as coll_file:
-            for fam_status, fam_data in self.collated_scores.items(): # write two separate blocks, for each set of familiars/unfamiliars
-                coll_file.write(f'{fam_status},{self.datafiles}')
-                for family, spec_scores in fam_data.items():
-                    coll_file.write(family)
-                    for scoreset in spec_scores:
-                        coll_file.write(scoreset)
-                    coll_file.write('\n') # leave gap between each family (will also separate familirs and unfamiliars)
+def csvize(source_path):
+    '''Inverse of jsonize, takes a processed chemical data json file and reduces it to a csv with just the listed spectra'''
+    source_path = sanitized_path(source_path)
+    json_data = load_chem_json(source_path)
+    dest_path = source_path.parent/f'{source_path.stem}(C).csv' # add "C" indicator to denote that this file has been csvized
+    dest_path.touch()
+    with dest_path.open(mode='w', newline='') as dest_file:
+        for instance in json_data['chem_data']:
+            csv.writer(dest_file).writerow([instance.name, *instance.spectrum]) # merge name and spectral data into a single row and write it to the csv
+
+def get_by_filetype(extension, path=Path.cwd()):  
+    '''Get all files of a particular file type present in a given directory, (the current directory by default)'''
+    if type(path) == str:
+        path = Path(path) # convert any string input (i.e. just the name) into Path object
+    
+    filetypes_present = tuple(file.stem for file in path.iterdir() if file.suffix == extension)
+    if filetypes_present == ():
+        filetypes_present = (None,)
+    return filetypes_present
+
+def add_csv_column(csv_path, new_col_data):
+    '''Takes a csv path and an iterable of data and appends the data to the csv as the rightmost column.
+    If no such csv exists, will create a new csv with a single column consisting of the data passed'''
+    if type(csv_path) == str:
+        csv_path = Path(csv_path) # ensure path is a Path object
+              
+    temp_path = Path(csv_path.parent, f'tmp{csv_path.name}') # a temporary file to write into
+    temp_path.touch() # create file at the temporary location
+    
+    with temp_path.open(mode='w', newline='') as outfile:
+        if not csv_path.exists(): # if the original file doesn't exist, simply write the contents to the temporary file (will be renamed later)
+            for entry in new_col_data:
+                outfile.write(f'{entry}\n')
+        else:
+            with csv_path.open(mode='r') as infile:
+                reader, writer = csv.reader(infile), csv.writer(outfile) # create csv parsing objects
+                for row, entry in zip(reader, new_col_data): # note that zip will truncate any data that doesn't fit into the file
+                    row.append(entry)    # append relevant entry to each row
+                    writer.writerow(row) # write extended row to temporary file  
+            csv_path.unlink()          # delete the original file
+        
+    temp_path.rename(csv_path) # rename the temporary file to that of the original, replacing it
+
+def clear_folder(path):
+    '''Recursively clear out the contents of a folder. A more tactful approach than deleting the folder and remaking it'''
+    if not path.is_dir():
+        raise ValueError(f'{path} does not point to a folder')
+    
+    for file in path.iterdir():
+        if file.is_dir():
+            clear_folder(file) # recursively clear any subfolders, as path can only delete empty files
+            try:
+                file.rmdir()
+            except OSError: # meant for the case where the file won't be deleted because the user is still inside it
+                raise PermissionError # convert to permission error (which my file checkers are built to handle)
+        else:
+            file.unlink()
