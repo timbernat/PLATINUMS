@@ -3,7 +3,6 @@ import numpy as np
 from iumsutils import *
 import matplotlib.pyplot as plt
 
-
 class Multiplot:
     '''Base class for creating easily referenceable objects to subplot into. Effectively a wrapper for plt.subplots'''
     def __init__(self, nrows=None, ncols=None, span=None, figsize=5):
@@ -32,18 +31,27 @@ class Multiplot:
         for i, plot in enumerate(plot_set):
             self.draw(plot, index=i)
         
-    def save(self, file_name):
+    def save(self, file_name, close=True):
         '''Wrapper for saving Multiplots'''
         self.fig.savefig(file_name)
-
+        if close:
+            plt.close() # by default, will close plots after saving to prevent clutter of the jupyter window and of memory
         
+def single_plot(plot, save_dir, figsize=20):
+    '''Boilerplate for creating a 1-panel Multiplot, plotting a particular plot object, and saving it to a desired location'''
+    mp = Multiplot(nrows=1, ncols=1, figsize=figsize)
+    mp.draw(plot)
+    mp.save(save_dir)
+
+    
 # Radar Chart classes
 class Mapped_Unit_Circle:
     '''Base background unit circle class used to create Radar Charts'''
     def __init__(self, mapping):
+        self.mapping = mapping
         theta = np.linspace(0, cmath.tau, 100)
         self.circle = (np.cos(theta), np.sin(theta))  # generic black unit circle, preset for all SD objects
-        
+           
         self.N = len(mapping) 
         self.labels = tuple(mapping.keys())
         self.poles  = [cmath.exp(1j* i*cmath.tau/self.N) for i in range(self.N)] # poles at the Nth roots of unity
@@ -58,7 +66,7 @@ class Mapped_Unit_Circle:
 
 class Base_RC:
     '''Base Radar Chart class. Builds unit circle based on species mapping, can plot set of point along with unreduced centroid'''     
-    unit_circle = None # !!CRITICAL!! - mapping for class must be set prior to use
+    unit_circle = None # !!CRITICAL!! - must set mapping for class prior to use
     
     def __init__(self, title, points, point_marker='gx', centroid_marker='b*'):
         self.title = title
@@ -162,6 +170,19 @@ class Metric_Plot(Line_Plot):
         self.title = f'Loss, Acc={[round(i, 3) for i in evals]}'
         super().__init__(losses, accuracies, title=self.title, legend_pos='center right', colormap=self.colormap)
         
+class Fermi_Plot(Line_Plot):
+    '''Class for producing Fermi-Dirac plots from species-wide aavs'''
+    def __init__(self, dataset, species, hotbit, precision=4):
+        predictions = dataset[get_family(species)][species].values() # pull out a list of aavs      
+        targets = [pred[hotbit] for pred in predictions]
+        targets.sort(reverse=True) # arrange target aavs in descending order       
+        
+        n_correct = sum(max(pred) == pred[hotbit] for pred in predictions) # "correct" defined to be when true identity is assigned the highest probability
+        n_total = len(predictions) 
+        self.score = round(n_correct/n_total, precision)
+        
+        super().__init__(normalized(targets), title=f'{species}, {n_correct}/{n_total} correct', colormap={species : 'm'})
+        
 class PWA_Plot(Line_Plot):
     '''Point-Wise Aggregate plot generation class'''
     colormap={
@@ -220,7 +241,25 @@ class Multibar: # this will serve as the base bar class, as ordinary bar graphs 
             
 class AAV_Bars(Multibar):
     '''class used for plotting bar charts of the AAVS of a particular species'''
-    mapping = None # !!CRITICAL!! - mapping for class must be set prior to use
+    def __init__(self, inst_name, aavs, families): # NOTE TO SELF: the "inst_name" sub_label is really just a placeholder, consider inplementing more cleanly going forward
+        super().__init__(families, [inst_name], aavs, title=inst_name, ylim=(0,1))
+        
+# miscellaneous/combined classes
+def plot_and_get_score(species, spectra, dataset, losses, accuracies, evals, savedir='.'):
+    '''Rolls several classes into one convenient method for producing species summary plots and generating scores'''
+    frame = Multiplot(nrows=2, ncols=2)
+
+    radar_chart = Species_RC(dataset, species)
+    hotbit = radar_chart.unit_circle.mapping[get_family(species)].index(1) # deduce hotbit from mapping and current species
     
-    def __init__(self, inst_name, aavs): # NOTE TO SELF: the "inst_name" sub_label is really just a placeholder, consider inplementing more cleanly going forward
-        super().__init__(self.mapping.keys(), [inst_name], aavs, title=inst_name, ylim=(0,1))
+    fermi_plot = Fermi_Plot(dataset, species, hotbit) # fermi plot not created in-place in order to extract the score
+    score = fermi_plot.score
+    
+    frame.draw(PWA_Plot(spectra, species), 0)
+    frame.draw(Metric_Plot(losses, accuracies, evals), 1)
+    frame.draw(fermi_plot, 2)  
+    frame.draw(radar_chart, 3)
+    frame.save(f'{savedir}/{species}') # draw all four panels, then save the figure to the appropriate folder under the species' name
+    plt.close() # prevent figure from displaying
+    
+    return score
