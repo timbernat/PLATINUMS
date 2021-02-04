@@ -9,8 +9,9 @@ from time import time
 from pathlib import Path
 
 # Built-In GUI imports
-import tkinter as tk    
+import tkinter as tk   
 from tkinter import messagebox
+from tkinter import simpledialog
 from tkinter import filedialog
 
 # PIP-installed Imports                
@@ -173,13 +174,16 @@ class TrainingWindow():
 # Section 2: Start of code for the actual GUI and application ---------------------------------------------------------------------------------------
 class PLATINUMS_App:
     '''PLATINUMS : Prediction, Training, And Labelling INterface for Unlabelled Mobility Spectra'''
+    data_path = Path('TDMS Datasets')          # specify here which folder to look in to find datasets
+    save_path = Path('Saved Training Results') # specify here which folders to save results to
+    spectrum_cap = 1000 # arbitrary large number, temporary solution for handling variable-sized dataset inputs (simplifies min-based logic)
+    
     def __init__(self, main):       
     #Main Window
         self.main = main
-        self.main.title('PLATINUMS 5.9.0-alpha')
+        self.main.title('PLATINUMS 5.9.9-alpha')
         self.parameters = {}
         
-        self.data_path, self.save_path = Path('TDMS Datasets'), Path('Saved Training Results') # specify here which folders to read data and save results to, respectively
         self.data_path.mkdir(exist_ok=True)  
         self.save_path.mkdir(exist_ok=True)  # will make directories if they don't already exist
 
@@ -198,7 +202,8 @@ class PLATINUMS_App:
           
     # Frame 0
         self.input_frame = ttl.ToggleFrame(self.main, text='Select Parameter Input Method: ', padx=4)
-        self.species, self.families, self.family_mapping, self.spectrum_size = [], [], {}, 0
+        self.species, self.families, self.family_mapping = [], [], {} # arbitrary cap, change in future to prevent loss of generality
+        self.min_spectrum_size = self.spectrum_cap # referenced in reset
         
         self.input_mode  = tk.StringVar() 
         for i, mode in enumerate(('Manual Input', 'Preset from File')):  # build selection type buttons sequentially w/o class references (not needed)
@@ -215,34 +220,39 @@ class PLATINUMS_App:
         
     #Frame 2
         self.hyperparam_frame    = ttl.ToggleFrame(self.main, text='Set Hyperparameters: ', padx=8, row=3)
-        self.epoch_entry         = ttl.LabelledEntry(self.hyperparam_frame, text='Epochs:', var=tk.IntVar(),       width=18, default=2048)
-        self.batchsize_entry     = ttl.LabelledEntry(self.hyperparam_frame, text='Batchsize:', var=tk.IntVar(),    width=18, default=32, row=1)
-        self.learnrate_entry     = ttl.LabelledEntry(self.hyperparam_frame, text='Learnrate:', var=tk.DoubleVar(), width=18, default=2e-5, col=3)
+        self.epoch_entry         = ttl.LabelledEntry(self.hyperparam_frame, text='Epochs:', var=tk.IntVar(),  default=2048, width=18, row=0, col=0)
+        self.batchsize_entry     = ttl.LabelledEntry(self.hyperparam_frame, text='Batchsize:', var=tk.IntVar(),  default=32,  width=18, row=1, col=0)
+        self.learnrate_entry     = ttl.LabelledEntry(self.hyperparam_frame, text='Learnrate:', var=tk.DoubleVar(), default=2e-5, width=18, row=0, col=3)
         self.confirm_hyperparams = ttl.ConfirmButton(self.hyperparam_frame, command=self.confirm_hp, row=1, col=3, cs=2)
         
     #Frame 3
-        self.param_frame = ttl.ToggleFrame(self.main, text='Set Training Parameters: ', padx=6,  row=4) 
-        self.fam_switch  = ttl.Switch(self.param_frame, text='Familiar Training :', underline=0, row=0, col=1)
-        self.save_switch = ttl.Switch(self.param_frame, text='Model Saving:',       underline=6, row=1, col=1)
-        self.stop_switch = ttl.Switch(self.param_frame, text='Early Stopping: ',    underline=0, row=2, col=1)
-        self.convergence_switch = ttl.Switch(self.param_frame, text='Convergence: ',underline=3, row=3, col=1)
-
-        self.cycle_fams   = tk.BooleanVar()
-        self.cycle_button = tk.Checkbutton(self.param_frame, text='Cycle?', underline=1, variable=self.cycle_fams)
-        self.cycle_button.grid(row=0, column=3, padx=1)
+        self.slicing_frame       = ttl.ToggleFrame(self.main, text='Set Slicing Parameters: ', padx=7, row=4)       
+        self.slice_dec_entry     = ttl.LabelledEntry(self.slicing_frame, text='Decrement:', var=tk.IntVar(),  default=10, width=13, row=0, col=0)
+        self.lower_bound_entry   = ttl.LabelledEntry(self.slicing_frame, text='Lower Bound:',      var=tk.IntVar(), default=0,  width=13, row=1, col=0)
+        self.n_slice_entry       = ttl.LabelledEntry(self.slicing_frame, text='Number of Slices:', var=tk.IntVar(), default=1,  width=13, row=0, col=3)   
+        self.confirm_sliceparams = ttl.ConfirmButton(self.slicing_frame, command=self.confirm_sparams, row=1, col=3, cs=2)
         
-        self.upper_bound_entry = ttl.LabelledEntry(self.param_frame, text='Upper Bound:',    var=tk.IntVar(), default=500, row=4, col=0)
-        self.slice_dec_entry   = ttl.LabelledEntry(self.param_frame, text='Slice Decrement:', var=tk.IntVar(), default=10, row=4, col=2)
-        self.lower_bound_entry = ttl.LabelledEntry(self.param_frame, text='Lower Bound:',     var=tk.IntVar(), default=0, row=5, col=0)
-        self.n_slice_entry     = ttl.LabelledEntry(self.param_frame, text='Number of Slices:', var=tk.IntVar(), default=1, row=5, col=2)
-        self.convergence_switch.dependents = None #(self.upper_bound_entry, self.slice_dec_entry, self.lower_bound_entry, self.n_slice_entry)
+    #Frame 4
+        self.param_frame  = ttl.ToggleFrame(self.main, text='Set Training Parameters: ', padx=6,  row=5) 
+        self.fam_switch   = ttl.Switch(self.param_frame, text='Familiar Training :', underline=0, row=0, col=0)
+        self.cycle_switch = ttl.Switch(self.param_frame, text='Cycle Familiars: ',   underline=1, row=1, col=0)
+        self.save_switch  = ttl.Switch(self.param_frame, text='Save Weights:',       underline=5, row=2, col=0)
+        self.stop_switch  = ttl.Switch(self.param_frame, text='Early Stopping: ',    underline=0, row=3, col=0)       
         
-        self.confirm_and_preset   = tk.Button(self.param_frame, text='Confirm and Save Preset', underline=17, padx=12, command=self.confirm_tparams_and_preset)
-        self.confirm_train_params = ttl.ConfirmButton(self.param_frame, command=self.confirm_tparams, underline=0, row=6, col=2, cs=2)      
-        self.confirm_and_preset.grid(row=6, column=0, columnspan=2, sticky='w')
+        self.blank_var1 = tk.BooleanVar()
+        self.blank_var2 = tk.BooleanVar()
+        self.save_preset = tk.BooleanVar()
+        self.blank_option1 = tk.Checkbutton(self.param_frame, text='      ', var=self.blank_var1, padx=5) # leaving room for future expnadability
+        self.blank_option2_button = tk.Checkbutton(self.param_frame, text='      ', var=self.blank_var2, padx=5)
+        self.save_preset_button = tk.Checkbutton(self.param_frame, text='Save Preset?', var=self.save_preset, underline=0, padx=5)
+        self.blank_option1.grid(row=0, column=2, sticky='e', padx=(0, 70))
+        self.blank_option2_button.grid(row=1, column=2, sticky='e', padx=(0, 70))
+        self.save_preset_button.grid(row=2, column=2, sticky='e', padx=(42, 24))
+        
+        self.confirm_train_params = ttl.ConfirmButton(self.param_frame, command=self.confirm_tparams, underline=0, padx=6, row=3, col=2)        
 
-    # Frame 4 - contains only the button used to trigger a main action  
-        self.activation_frame = ttl.ToggleFrame(self.main, text='', padx=0, pady=0, row=5)   
+    # Frame 5 - contains only the button used to trigger a main action  
+        self.activation_frame = ttl.ToggleFrame(self.main, text='', padx=0, pady=0, row=6)   
         self.train_button = tk.Button(self.activation_frame, text='TRAIN', padx=22, width=44, bg='deepskyblue2', underline=0, command=self.training)
         self.train_button.grid(row=0, column=0)
         
@@ -251,25 +261,24 @@ class PLATINUMS_App:
         self.switch_tpmode()
          
     # Packaging together some widgets and attributes, for ease of reference (also useful for self.reset() and self.isolate() methods)
-        self.arrays   = (self.parameters, self.species, self.families, self.family_mapping) 
-        self.frames   = (self.input_frame, self.selection_frame, self.hyperparam_frame, self.param_frame, self.activation_frame)
+        self.arrays      = (self.parameters, self.species, self.families, self.family_mapping) 
+        self.switch_vars = (self.read_mode, self.input_mode, self.blank_var1, self.blank_var2, self.save_preset)
+        self.frames      = (self.input_frame, self.selection_frame, self.hyperparam_frame, self.slicing_frame, self.param_frame, self.activation_frame)
 
         self.switch_mapping = {self.fam_switch : 'fam_training',
                                self.save_switch : 'save_weights',
                                self.stop_switch : 'early_stopping',
-                               self.convergence_switch : 'convergence'}
+                               self.cycle_switch : 'cycle_fams'}
         self.hp_entry_mapping = {self.epoch_entry : 'num_epochs',
                                  self.batchsize_entry : 'batchsize',
                                  self.learnrate_entry : 'learnrate'}
-        self.slice_entry_mapping = {self.upper_bound_entry : 'trimming_max',
-                                   self.lower_bound_entry : 'trimming_min', 
-                                   self.slice_dec_entry : 'slice_decrement',
-                                   self.n_slice_entry : 'num_slices'}
+        self.slice_entry_mapping = {self.lower_bound_entry : 'trimming_min', 
+                                    self.slice_dec_entry : 'slice_decrement',
+                                    self.n_slice_entry : 'num_slices'}
         self.entry_mapping = {**self.hp_entry_mapping, **self.slice_entry_mapping} # merged internal dict of all entries present  
         
         self.main.bind('<Key>', self.key_in_input) # activate internal conditional hotkey binding
         self.reset() # set menu to default configuration
-        filedialog.Open(title='test', initialdir=Path('nnenv'))
         
     #General Methods
     def lift(self):
@@ -316,15 +325,15 @@ class PLATINUMS_App:
             #self.confirm_hp()
         elif self.param_frame.state == 'normal':
             switch_mapping = {'f' : self.fam_switch,
-                              's' : self.save_switch,
+                              'w' : self.save_switch,
                               'e' : self.stop_switch,
-                              'v' : self.convergence_switch}
+                              'y' : self.cycle_switch}
             if event.char in switch_mapping:
                 switch_mapping[event.char].toggle() # make parameter switches toggleable with keyboard
-            elif event.char == 'y':
-                self.cycle_fams.set(not self.cycle_fams.get()) # invert cycling status
-            elif event.char == 'p': # add hotkey to save preset and proceed...
-                self.confirm_tparams_and_preset()
+            elif event.char == 's': # add hotkey to save preset and proceed...
+                self.save_preset.set(not self.save_preset.get()) # invert cycling status
+            #elif event.char == 'n': # add hotkey to save preset and proceed...
+            #    self.blank_var2.set(not self.blank_var2.get()) # invert cycling status
             elif event.char == 'c': # or just to proceed
                 self.confirm_tparams()
         elif self.activation_frame.state == 'normal' and event.char == 't': # do not allow hotkeys to work if frame is disabled
@@ -336,9 +345,10 @@ class PLATINUMS_App:
             if isinstance(widget, tk.Toplevel):
                 widget.destroy()
         
-        for tk_switch_var in (self.read_mode, self.input_mode, self.cycle_fams):
+        for tk_switch_var in self.switch_vars:
             tk_switch_var.set(0)
         
+        self.min_spectrum_size = self.spectrum_cap # reset to arbitrary cap set for class
         for array in self.arrays:
             array.clear()
         
@@ -369,7 +379,7 @@ class PLATINUMS_App:
                              
     def confirm_input_mode(self):
         '''Performs final check over input and determines how to proceed appropriately'''
-        if self.input_mode.get() == '0': # interpreting str as bool doesn't seem to work directly
+        if self.input_mode.get() == '0': # cannot interpret directly as bool, since option is ternary (manual, preset, or empty)
             messagebox.showerror('No input mode selected!', 'Please choose either "Manual" or "Preset" input mode')
         elif 'data_files' not in self.parameters: # if no data_files entry exists
             messagebox.showerror('Files Undefined', 'Property "data_files" either mislabelled or missing from parameters, please check preset')
@@ -381,10 +391,11 @@ class PLATINUMS_App:
             self.main.config(cursor='wait') # this make take a moment for large sets of files, indicate to user (via cursor) to be patient
             for i, file in enumerate(self.parameters['data_files']):
                 json_data = iumsutils.load_chem_json(self.data_path/f'{file}.json')
+                self.min_spectrum_size = min(self.min_spectrum_size, json_data['spectrum_size']) # ensures min_spectrum size is indeed the minimum across all files
                 if i == 0: # flag the first file read differently, for comparison with all others (moot in the case of a single file)
                     initial_data = json_data
                 else:
-                    for data_property in ('spectrum_size', 'species', 'families', 'family_mapping'): # requires counter for comparision, since order may differ
+                    for data_property in ('species', 'families', 'family_mapping'): 
                         if json_data[data_property] != initial_data[data_property]: # relies on list properties in jsons being sorted identically (avoids comparison via Counter) 
                             self.main.config(cursor='') # return cursor to normal
                             messagebox.showerror('Property Mismatch', f'Attribute "{data_property}" in {file} does not match that of the other files chosen')
@@ -393,8 +404,6 @@ class PLATINUMS_App:
                 self.species        = initial_data['species']
                 self.families       = initial_data['families']
                 self.family_mapping = initial_data['family_mapping']
-                self.spectrum_size  = initial_data['spectrum_size'] 
-                self.upper_bound_entry.set_value(self.spectrum_size) # adjust the slicing upper bound to the size of spectra passed
             self.main.config(cursor='') # return cursor to normal
             
             if self.input_mode.get() == 'Manual Input':
@@ -403,7 +412,6 @@ class PLATINUMS_App:
                 try: # filling in all the fields in the GUI based on the selected preset
                     self.confirm_selections() # handles the case when family or all are passed explicitly as selections  
                     self.read_mode.set(self.parameters['read_mode'])
-                    self.cycle_fams.set(self.parameters['cycle_fams']) # setting the switches appropriately
 
                     for switch, param in self.switch_mapping.items():
                         switch.apply_state(self.parameters[param]) # configure all the switch values in the GUI
@@ -446,47 +454,48 @@ class PLATINUMS_App:
         '''Confirm the selected hyperparameters and proceed'''
         for hp_entry, param in self.hp_entry_mapping.items():
             self.parameters[param] = hp_entry.get_value()  
-        self.isolate(self.param_frame)
-        self.convergence_switch.disable()  
+        self.isolate(self.slicing_frame) 
+        
+    # Frame 3 (slicing parameter) Methods
+    def confirm_sparams(self):
+        '''Confirm the selected slicing and proceed'''
+        for slice_entry, param in self.slice_entry_mapping.items():
+            self.parameters[param] = slice_entry.get_value()  
+            
+        self.check_trimming_bounds() # ensure bounds make sense, notify the user if they don't
+        self.isolate(self.param_frame)     
      
-    # Frame 3 (training parameter) Methods
+    # Frame 4 (training parameter) Methods
     def check_trimming_bounds(self):
         '''Performs error check over the trimming bounds held internally to ensure that sensible bounds are chosen to ensure that training will not fail'''
-        trimming_min, trimming_max = self.parameters['trimming_min'], self.parameters['trimming_max'] # have pulled these out solely for readability
-        num_slices, slice_decrement =self.parameters['num_slices'], self.parameters['slice_decrement']
+        trimming_min    = self.parameters['trimming_min'] # have pulled these out here solely for readability
+        num_slices      = self.parameters['num_slices']
+        slice_decrement = self.parameters['slice_decrement']
         
         if trimming_min < 0 or type(trimming_min) != int: 
-            messagebox.showerror('Boundary Value Error', 'Trimming Min must be a positive integer or zero')
-        elif trimming_max <= 0 or type(trimming_max) != int:
-            messagebox.showerror('Boundary Value Error', 'Trimming Max must be a positive integer')
-        elif trimming_max > self.spectrum_size:                            
-            messagebox.showerror('Limit too high', 'Upper bound greater than data size, please decrease "Upper Bound"')
-        elif trimming_max - (num_slices - 1)*slice_decrement <= trimming_min: # -1 acounts for the fact that no actual slicing occurs on the first slice segment
-            messagebox.showerror('Boundary Mismatch', 'Upper limit will not always exceed lower;\nDecrease either slice decrement or lower bound')
+            messagebox.showerror('Boundary Value Error', 'Trimming Min must be a positive integer or zero')       
+        # -1 from num_slices accounts for the fact that no actual slicing occurs on the first slice segment
+        # since all data must have spectra equal to or longer than the minimum length determined, this single check guarantees all data will pass
+        elif self.min_spectrum_size - (num_slices - 1)*slice_decrement <= trimming_min: 
+            messagebox.showerror('Boundary Mismatch', 'Upper limit will not always exceed lower;\nDecrease either slice decrement or lower bound')         
     
     def confirm_tparams(self):
         '''Confirm training parameter selections, perform pre-training error checks if necessary'''
-        self.parameters['cycle_fams'] = self.cycle_fams.get()
         for switch, param in self.switch_mapping.items():
             self.parameters[param] = switch.value # configure parameters based on the switch values
-          
-        for slice_entry, param in self.slice_entry_mapping.items():
-            self.parameters[param] = slice_entry.get_value()
 
-        self.check_trimming_bounds() # ensure bounds make sense, notify the user if they don't
-        self.isolate(self.activation_frame) # make the training button clickable
-        
-    def confirm_tparams_and_preset(self):
-        '''Confirm training parameters in manual mode, as well as saving the configured training preset to the central preset folder'''
-        self.confirm_tparams()
-        preset_path = Path(filedialog.asksaveasfilename(title='Save Preset to file', initialdir='./Training Presets', defaultextension='.json', filetypes=[('JSONs', '*.json')] ))
-        try: 
-            with open(preset_path, 'w') as preset_file:
-                json.dump(self.parameters, preset_file)
-        except PermissionError: # catch the case in which the user cancels the preset saving
-            self.isolate(self.param_frame) # re-enable the frame and allow the user to try again
+        if self.save_preset.get(): # if the user has elected to save the current preset
+            preset_path = Path(filedialog.asksaveasfilename(title='Save Preset to file', initialdir='./Training Presets',
+                                                            defaultextension='.json', filetypes=[('JSONs', '*.json')] ))
+            try: 
+                with open(preset_path, 'w') as preset_file:
+                    json.dump(self.parameters, preset_file)
+            except PermissionError: # catch the case in which the user cancels the preset saving
+                return           
+            
+        self.isolate(self.activation_frame) # make the training button clickable if all goes well
              
-    # Frame 4: the training routine itself, this is where the magic happens
+    # Frame 5: the training routine itself, this is where the magic happens
     def training(self, test_set_proportion=0.2, keras_verbosity=0): # use keras_verbosity of 2 for lengthy and detailed console printouts
         '''The function defining the neural network training sequence and parameters'''
         # UNPACKING INTERNAL PARAMETERS DICT AND INITIALIZING SOME VALUES
@@ -497,47 +506,52 @@ class PLATINUMS_App:
         num_epochs      = self.parameters['num_epochs'] 
         batchsize       = self.parameters['batchsize']
         learnrate       = self.parameters['learnrate'] 
-        
-        trimming_max    = self.parameters['trimming_max'] 
+         
         slice_decrement = self.parameters['slice_decrement'] 
         trimming_min    = self.parameters['trimming_min'] 
         num_slices      = self.parameters['num_slices'] 
         
         cycle_fams      = self.parameters['cycle_fams']
         fam_training    = self.parameters['fam_training']
-        convergence     = self.parameters['convergence']
         save_weights    = self.parameters['save_weights']
         early_stopping  = self.parameters['early_stopping']      
 
         # FILE MANAGEMENT CODE, GUARANTEES THAT NO ACCIDENTAL OVERWRITES OCCUR AND THAT AN APPROPRIATE EMPTY FOLDER EXISTS TO WRITE RESULTS TO
-        parent_name = f'{num_epochs}-epoch, {cycle_fams and "cycled" or (fam_training and "familiar" or "unfamiliar")}' # name of folder with results for this training session
-        parent_folder = self.save_path/parent_name # same name applied to Path object, useful for incrementing file_id during overwrite checking
-        file_id = 0
-        while True: 
-            try: # if no file exists, can make a new one and proceed without issue
-                parent_folder.mkdir(exist_ok=False) 
-                break
-            except FileExistsError: # if one DOES exist, enter checking logic
-                if not any(parent_folder.iterdir()): # if the file exists but is empty, can also proceed with no issues
-                    break 
-                elif (parent_folder/'Training Preset.json').exists(): # otherwise, if the folder has a preset present...
-                    with (parent_folder/'Training Preset.json').open() as existing_preset_file: 
-                        existing_preset = json.load(existing_preset_file)
+        parent_name = simpledialog.askstring(title='Set Result Folder Name', prompt='Please enter a name to save training results under:',
+                                             initialvalue=f'{num_epochs} epoch, {cycle_fams and "cycled" or (fam_training and "familiar" or "unfamiliar")}')   
+        if not parent_name: # if user cancel operation or leaves field blank, reset train option
+            self.activation_frame.enable()
+            return
+            
+        else:  # otherwise, begin file checking loop  
+            parent_folder = self.save_path/parent_name # same name applied to Path object, useful for incrementing file_id during overwrite checking
+            file_id = 0
+            while True: 
+                try: # if no file exists, can make a new one and proceed without issue
+                    parent_folder.mkdir(exist_ok=False) 
+                    break
+                except FileExistsError: # if one DOES exist, enter checking logic
+                    if not any(parent_folder.iterdir()): # if the file exists but is empty, can also proceed with no issues
+                        break 
+                    elif (parent_folder/'Training Preset.json').exists(): # otherwise, if the folder has a preset present...
+                        with (parent_folder/'Training Preset.json').open() as existing_preset_file: 
+                            existing_preset = json.load(existing_preset_file)
 
-                    if existing_preset != self.parameters: # ...and if the preset is different to the current preset, start the checks over with incremented name
-                        file_id += 1
-                        parent_folder = self.save_path/f'{parent_name}({file_id})' # appends number to end of duplicated files (similar to Windows file management)
-                        continue
+                        if existing_preset != self.parameters: # ...and if the preset differs from the current preset, start checks over with incremented name
+                            file_id += 1
+                            parent_folder = self.save_path/f'{parent_name}({file_id})' # appends differentiating number to end of duplicated files 
+                            continue # return to start of checking loop
 
-                # this branch is only executed if no preset file is found OR (implicitly) if the existing preset matches the one found
-                if messagebox.askyesno('Request Overwrite', 'Folder with same name and same (or no) training parameters found; Allow overwrite of folder?'):
-                    try:
-                        iumsutils.clear_folder(parent_folder) # empty the folder if permission is given
-                        break
-                    except PermissionError: # if emptying fails because the user forgot to close files, notify them and exit the training program
-                        messagebox.showerror('Overwrite Error!', f'{parent_folder}\nhas file(s) open and cannot be overwritten;\n\nPlease close all files and try training again')
-                self.activation_frame.enable()
-                return # final return branch executed in all cases except where user allows overwrite AND it is successful
+                    # this branch is only executed if no preset file is found OR (implicitly) if the existing preset matches the one found
+                    if messagebox.askyesno('Request Overwrite', 'Folder with same name and same (or no) training parameters found; Allow overwrite of folder?'):
+                        try:
+                            iumsutils.clear_folder(parent_folder) # empty the folder if permission is given
+                            break
+                        except PermissionError: # if emptying fails because user forgot to close files, notify them and exit training loop
+                            messagebox.showerror('Overwrite Error!', f'{parent_folder}\nhas file(s) open and cannot be \
+                                                  overwritten;\n\nPlease close all files and try training again')
+                    self.activation_frame.enable()
+                    return # final return branch executed in all cases except where user allows overwrite AND it is successful
         
         preset_path = parent_folder/'Training Preset.json'
         with preset_path.open(mode='w') as preset_file: 
@@ -560,7 +574,9 @@ class PLATINUMS_App:
             results_folder = Path(parent_folder, f'{data_file} Results') # main folder with all results for a particular data file  
             results_folder.mkdir(exist_ok=True)        
 
-            chem_data = iumsutils.load_chem_json(self.data_path/f'{data_file}.json')['chem_data'] # load in instance data from the dataset
+            json_data = iumsutils.load_chem_json(self.data_path/f'{data_file}.json') # load in the data file for the current ecaluation round
+            chem_data = json_data['chem_data']        # isolate the spectral/chemical data 
+            spectrum_size = json_data['spectrum_size'] # set maximum length to be the full spectrum length of the current dataset
 
             # SECONDARY TRAINING LOOP, REGULATES CYCLING BETWEEN FAMILIARS AND UNFAMILIARS
             for familiar_cycling in range(1 + cycle_fams):    
@@ -578,9 +594,9 @@ class PLATINUMS_App:
 
                 # TERTIARY TRAINING LOOP, REGULATES SLICING
                 for segment in range(num_slices): 
-                    lower_bound, upper_bound = trimming_min, trimming_max - slice_decrement*segment
+                    lower_bound, upper_bound = trimming_min, spectrum_size - slice_decrement*segment
                     point_range = f'Points {lower_bound}-{upper_bound}'
-                    if lower_bound == 0 and upper_bound == self.spectrum_size: 
+                    if lower_bound == 0 and upper_bound == spectrum_size: 
                         point_range = point_range + ' (Full Spectra)' # indicate whether the current slice is in fact truncated
                    
                     train_window.set_slice(point_range)
@@ -640,7 +656,6 @@ class PLATINUMS_App:
                                 local_preset['fam_training'] = fam_training # to account for cycling
                                 local_preset['cycle_fams']   = False        # ensure no cycling is performed for reproduction
                                 local_preset['selections']   = [evaluand]   # only requires a single evaluand (and in the case of familiars, the particular one is not at all relevant)
-                                local_preset['trimming_max'] = upper_bound  # ensure trimming_max in the preset matches current upper bound (not necessary for the constant lower bound)
                                 local_preset['num_slices']   = 1            # only one slice 
                                 with open(weights_folder/f'Reproducability Preset ({point_range}).json', 'w') as weights_preset: 
                                     json.dump(local_preset, weights_preset)  # add a preset to each model file that allows for reproduction of ONLY that single model file                      
@@ -672,7 +687,8 @@ class PLATINUMS_App:
                         for species, score in species_scores.items():
                             row_labels.append(species)
                             score_list.append(score)
-                        row_labels.append(' ')   # leave a gap between each family
+                        row_labels.append(' ')   
+                        score_list.append(' ')   # leave a gap between each family
                                       
                     # WRITING/PLOTTING RESULTS TO FILES
                     train_window.set_status(f'Outputting Summaries of Results...')
@@ -697,7 +713,10 @@ class PLATINUMS_App:
                     model.summary(print_fn=lambda x : log_file.write(f'{x}\n')) # write model to log file (since model is same throughout, should only write model on the last pass)
                     log_file.write(f'\nTraining Time : {iumsutils.format_time(time() - start_time)}') # log the time taken for this particular training session as well
         
-        # POST-TRAINING WRAPPING-UP         
+        # POST-TRAINING WRAPPING-UP   
+        if cycle_fams:
+            pass # inject code here to merge familiar and unfamiliar scorecards together
+        
         train_window.button_frame.enable()  # open up post-training options in the training window
         train_window.abort_button.configure(state='disabled') # disable the abort button (idiotproofing against its use after training)
         train_window.set_status(f'Finished in {iumsutils.format_time(time() - overall_start_time)}') # display the time taken for all trainings in the training window
