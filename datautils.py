@@ -1,31 +1,34 @@
-import json, math, random, re
-import numpy as np
+import json, math, random
+import numpy as np # at some point, consider replacing all data-wide spectral operations with numpy for spped and cleanliness
 from pathlib import Path
 
 from iumsutils import *
+from plotutils import *
 
 # data transformation methods (for jsons only). NOTE: actual transforms will always end in the suffiz "-ize", while any helper methods will not
-def base_transform(source_path, operator=None, discriminator=None, indicator='', **opargs):
+def base_transform(source_path, operator=None, discriminator=lambda x : False, indicator='', **opargs):
     '''The base method for transforming data, takes a .json data file name, an optional operator to modify spectra (takes spectra and optional arguments),
     an optional discriminator to omit spectra if some condition is met (takes an Instance object and the full chem_data list as arguments), 
     and an optional indicator to denote that a tranform has occurred. NOTE: tranformed data is written to a new file, ORIGINAL DATA IS READ ONLY'''
     json_data = load_chem_json(source_path)
-    for i, instance in enumerate(json_data['chem_data']):
-        if not (discriminator and discriminator(instance)): # omit instance only when there is a discriminator present AND its condition is met
-            if operator:            
-                json_data['chem_data'][i] = instance._replace(spectrum = operator(instance.spectrum, **opargs)) # operate on the spectrum if an operator is given
+    json_data['chem_data'] = [
+        (operator and instance._replace(spectrum = operator(instance.spectrum, **opargs)) or instance) # operate on the spectrum if an operator is given   
+            for instance in json_data['chem_data']
+                if not discriminator(instance)] # omit instance when discriminator condition is met
     
-    json_data['spectrum_size'] = len(instance.spectrum) # takes size to be that of the last spectrum (jsonize guarantees uniform length, so a uniform transformation won't change that)
+    # takes size to be that of the last spectrum (jsonize guarantees uniform length, unchanged by uniform transformation )
+    json_data['spectrum_size'] = len(json_data['chem_data'][-1].spectrum)
+    
     if discriminator:  # only when spectra are being omitted might it be necessary to recount species and families
         json_data['species'], json_data['species_count'] = ordered_and_counted(instance.species for instance in json_data['chem_data'])
         json_data['families'], json_data['family_count'] = ordered_and_counted(instance.family for instance in json_data['chem_data'])
         
         if json_data['family_mapping'].keys() != json_data['families']: # if the families present have changed, must redo the family mapping as well
             json_data['family_mapping'] = one_hot_mapping(json_data['families']) # rebuild the family mapping
-            for instance in json_data['chem_data']:
-                instance.vector = json_data['family_mapping'][instance.family] # all mapping vectors based on the new mapping         
+            for i, instance in enumerate(json_data['chem_data']):
+                json_data['chem_data'][i] = instance._replace(vector = json_data['family_mapping'][instance.family]) # reassign mapping vectors based on the new mapping         
     
-    source_path = sanitized_path(source_path)
+    source_path = sanitized_path(source_path) # ensure Pathlike object pointing to json
     dest_path = source_path.parent/f'{source_path.stem}{indicator}.json'
     dest_path.touch()
     with dest_path.open(mode='w') as dest_file: # this comment is a watermark - 2020, timotej bernat
@@ -69,7 +72,7 @@ def get_RIP_cutoffs(source_path, lb=0.15, ub=0.95):
 def mode1_filterize(source_path, lower_bound=0.15, upper_bound=0.95):
     '''Filtering regime specific to Mode 1, will not work with other Modes, and Mode 1 sets should not be used with other filtering regimes.
     Culls all spectra whose RIP lies outside of some prescribed normalized bounds for the RIP for that particular species'''
-    if 'Mode 1' not in source_path.stem: # ensure this transform is not applied to data for which it is not compatible
+    if 'Mode 1' not in str(source_path): # ensure this transform is not applied to data for which it is not compatible
         raise TypeError('File is not a Mode 1 dataset')
         
     if not (0 < lower_bound < 1) or not (0 < upper_bound < 1): # some error checking to ensure that the imposed limits make sense
@@ -115,7 +118,7 @@ def positivize(source_path): # consider omitting entirely, leads to awkward floa
 def logarithmize(source_path):
     '''Finds the absolute minimum point of a baseline-standardized dataset, makes this the new baseline (to ensure all points are positive and avoid a log domain error)
     and takes the natural log over all spectra (exaggerates relative differences even further)'''
-    if '(B' not in source_path.stem: # consider using regex for this check (numerical value in baseline indicator is variable)
+    if '(B' not in str(source_path): # consider using regex for this check (numerical value in baseline indicator is variable)
         raise TypeError('Transform must be performed over baseline-standardized data')       
     chem_data = load_chem_json(source_path)['chem_data']    
     eps_baseline = -fold(chem_data, min) + np.finfo(float).eps # the minimum non-biased/equitable baseline that guarantees all data are positive    
@@ -134,13 +137,13 @@ inv_fourier = lambda spectrum : list(np.fft.ihfft(spectrum).real) # returns real
 
 def fourierize(source_path, cutoff=None): # if no cutoff is given, will simply yield the full spectra
     '''Replaces spectra in a set with their Fourier Tranforms (Hermitian and real-valued)'''
-    if '(FT)' in source_path.stem:
+    if '(FT)' in str(source_path):
         raise TypeError('Input cannot already be Fourierized')   
     base_transform(source_path, operator=fourier, indicator=f'(FT{cutoff and cutoff or ""})', cutoff=cutoff) 
 
 def inv_fourierize(source_path): # cutoff is list index of highest point to keep
     '''Replaces spectra in a set with their Fourier Tranforms (Hermitian and real-valued)'''
-    if '(FT)' not in source_path.stem:
+    if '(FT)' not in str(source_path):
         raise TypeError('Input must first be Fourierized')   
     base_transform(source_path, operator=inv_fourier, indicator='(IFT)') # transform is converted to list (np arrays are not JSON serializable)  
     
@@ -150,32 +153,42 @@ def fourier_filterize(source_path, cutoff):  # combines functionality of fourier
     
     
 # analysis and data characterization methods---------------------------------------------------------------------------------------------------------------------------
-def inspect_spectra(source_path, species, ncols=6, save_path=None):
+def inspect_spectra(source_path, species, ncols=6, save_path=None, marker='c-'):
     '''Plot the spectra of all instances of one species in the chosen dataset'''
     json_data = load_chem_json(source_path)
     if species not in json_data['species']:
         raise ValueError(f'Species "{species}" not in dataset')
-        
-    plots = [BundledPlot(data=instance.spectrum, title=instance.name, plot_type='s')
-             for instance in json_data['chem_data'] if instance.species == species]
-    adagraph(plots, ncols=ncols, save_dir=save_path)
 
-def inspect_variation(source_path, ncols=4, save_folder=Path('TDMS Datasets/PWA Plots')):
+    plots = [Single_Line_Plot(instance.spectrum, title=instance.name, colormap={'spectrum' : marker}) 
+                 for instance in json_data['chem_data']
+                     if instance.species == species] 
+    
+    panel = Multiplot(ncols=ncols, span=len(plots))
+    panel.draw_series(plots)
+    
+    if save_path:
+        panel.save(save_path)
+
+def inspect_variation(source_path, ncols=6, save_path=None):
     '''Generate a set of plots for all species in a dataset which shows how the baseline noise varies across spectra at each sample point'''
-    if not save_folder.is_dir():
-        raise ValueError('save_folder does not point to a folder')
-    
     json_data = load_chem_json(source_path)
-    plots = [BundledPlot(data=[instance.spectrum for instance in json_data['chem_data'] if instance.species == species],
-                         title=f'SV of {species}, ({json_data["species_count"][species]} instances)', # NOTE: leave the double quotes (they're deliberate!)
-                         plot_type='v')
-            for species in json_data['species']] # one plot per species       
-    adagraph(plots, ncols, save_folder/f'{source_path.stem} Species-wise PWAs')
+    plots = [PWA_Plot([instance.spectrum
+                           for instance in json_data['chem_data']
+                               if instance.species == species], species) 
+             for species in json_data['species']]  
     
-def inspect_fsmoothing(source_path, inst, initial_cutoff=0, n_steps=1, step_size=1, save_figure=False):
+    panel = Multiplot(ncols=ncols, span=len(plots))
+    panel.draw_series(plots)
+    
+    if save_path:
+        source_path = sanitized_path(source_path) # ensure Pathlike object pointing to json
+        named_save_path = Path(save_path, f'{sanitized_path(source_path).stem} Species-wise PWAs')
+        panel.save(named_save_path)     
+    
+def inspect_fsmoothing(source_path, inst, initial_cutoff=0, nsteps=1, step_size=1, ncols=6, save_figure=False):
     '''Investigate the original spectrum, Fourier Spectrum, truncated Fourier Spectrum, and reconstructed truncated spectrum of a
     single instance in the specified dataset. Optionally, can save the figure to the current directory, if it is of interest'''
-    if 'FT' in source_path.stem:
+    if 'FT' in str(source_path):
         raise TypeError('Method only applies to non-Fourier Transformed data') 
    
     json_data = load_chem_json(source_path)
@@ -191,29 +204,41 @@ def inspect_fsmoothing(source_path, inst, initial_cutoff=0, n_steps=1, step_size
     if max_cutoff > fft_data.size:
         raise ValueError('The resulting amount of cutoffs exceeds the FFT data size')
     
-    plots = [BundledPlot(data=orig_data, title='Original Spectrum')]
+    plots = [Single_Line_Plot(orig_data, title='Original Spectrum')]
     for cutoff in range(initial_cutoff, max_cutoff, step_size):
         cut_fft_data = np.fft.hfft(orig_data)
         cut_fft_data[cutoff:] = 0 
-        plots.append(BundledPlot(data=np.fft.ihfft(cut_fft_data).real, title=f'Reconstructed Spectrum  (to freq. {cutoff})'))
+        plots.append(Single_Line_Plot(np.fft.ihfft(cut_fft_data).real, title=f'Reconstructed Spectrum  (to freq. {cutoff})'))
 
     if nsteps == 1:
-        plots.insert(1, BundledPlot(data=fft_data, title='FFT Spectrum'))
-        plots.insert(2, BundledPlot(data=cut_fft_data, title=f'FFT Spectrum (to freq. {cutoff})'))
+        plots.insert(1, Single_Line_Plot(fft_data, title='FFT Spectrum'))
+        plots.insert(2, Single_Line_Plot(cut_fft_data, title=f'FFT Spectrum (to freq. {cutoff})'))
     else:
-        plots.append(BundledPlot(data=np.fft.ihfft(fft_data).real, title='Fully Reconstructed Spectrum'))
- 
-    save_dir = (save_figure and f'{cutoff and "Singular" or "Ranged"} Fourier Smoothing of {inst}' or None)
-    adagraph(plots, ncols=4, save_dir=save_dir)
+        plots.append(Single_Line_Plot(np.fft.ihfft(fft_data).real, title='Fully Reconstructed Spectrum'))
 
-def inspect_fourier_maxima(source_path, save_folder=None):
+    panel = Multiplot(ncols=ncols, span=len(plots))
+    panel.draw_series(plots)
+
+    if save_figure:      
+        save_path = f'{cutoff and "Singular" or "Ranged"} Fourier Smoothing of {inst}'
+        panel.save(save_path)
+
+def inspect_fourier_maxima(source_path, save_path=None):
     '''Plot all Fourier maxima (e.g. the baseline magnitudes) by family, in the order the families appear in the data'''
-    if '(FT)' not in source_path.stem:
+    if '(FT)' not in str(source_path):
         raise ValueError('Method only applies to Fourier-Transformed datasets')
     
     json_data = load_chem_json(source_path)
-    plots = [BundledPlot(data=[max(instance.spectrum) for instance in json_data['chem_data'] if instance.family == family], title=family)
-                                                       for family in json_data['families']]     
-    if save_folder:
-        save_folder = save_folder/f'Fourier Maxima by Family - {source_path.stem}'
-    adagraph(plots, ncols=5, save_dir=save_folder)
+    
+    plots = [Single_Line_Plot([max(instance.spectrum)
+                            for instance in json_data['chem_data']
+                                if instance.family == family], title=family)
+             for family in json_data['families']]  
+    
+    panel = Multiplot(nrows=1, span=len(json_data['families']))
+    panel.draw_series(plots)
+    
+    if save_path:
+        source_path = sanitized_path(source_path) # ensure Pathlike object pointing to json
+        save_path = save_path/f'Fourier Maxima by Family - {source_path.stem}'
+        panel.save(save_path)
