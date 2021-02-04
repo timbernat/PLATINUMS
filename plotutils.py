@@ -37,11 +37,12 @@ class Multiplot:
         if close:
             plt.close() # by default, will close plots after saving to prevent clutter of the jupyter window and of memory
         
-def single_plot(plot, save_dir, figsize=20):
+def single_plot(plot_obj, save_dir=None, figsize=20):
     '''Boilerplate for creating a 1-panel Multiplot, plotting a particular plot object, and saving it to a desired location'''
     mp = Multiplot(nrows=1, ncols=1, figsize=figsize)
-    mp.draw(plot)
-    mp.save(save_dir)
+    mp.draw(plot_obj)
+    if save_dir:
+        mp.save(save_dir)
 
     
 # Radar Chart classes
@@ -146,7 +147,7 @@ class Macro_RC(Base_RC):
 # Line Plot classes
 class Line_Plot:
     '''Basic class of line plot, allows for multiple lines and moveable legends, within the confines of the Mutiplot Framework'''
-    def __init__(self, *args, title=None, legend_pos=None, colormap={}):
+    def __init__(self, *args, title=None, legend_pos=None, colormap={'line' : 'c-'}):
         self.lines = args
         self.legend_pos = legend_pos
         self.colormap = colormap
@@ -170,19 +171,6 @@ class Metric_Plot(Line_Plot):
         self.title = f'Loss, Acc={[round(i, 3) for i in evals]}'
         super().__init__(losses, accuracies, title=self.title, legend_pos='center right', colormap=self.colormap)
         
-class Fermi_Plot(Line_Plot):
-    '''Class for producing Fermi-Dirac plots from species-wide aavs'''
-    def __init__(self, dataset, species, hotbit, precision=4):
-        predictions = dataset[get_family(species)][species].values() # pull out a list of aavs      
-        targets = [pred[hotbit] for pred in predictions]
-        targets.sort(reverse=True) # arrange target aavs in descending order       
-        
-        n_correct = sum(max(pred) == pred[hotbit] for pred in predictions) # "correct" defined to be when true identity is assigned the highest probability
-        n_total = len(predictions) 
-        self.score = round(n_correct/n_total, precision)
-        
-        super().__init__(normalized(targets), title=f'{species}, {n_correct}/{n_total} correct', colormap={species : 'm'})
-        
 class PWA_Plot(Line_Plot):
     '''Point-Wise Aggregate plot generation class'''
     colormap={
@@ -197,6 +185,25 @@ class PWA_Plot(Line_Plot):
         self.averages = np.average(self.spectra, axis=0)
         self.minima   = np.amin(self.spectra, axis=0)
         super().__init__(self.maxima, self.averages, self.minima, title=species, legend_pos='upper right', colormap=self.colormap)
+        
+        
+class Single_Line_Plot(Line_Plot):
+    '''Syntactic sugar for plotting a single line'''
+    def __init__(self, line, title=None, legend_pos=None, label='line', marker='c-'):
+        super().__init__(line, title=title, legend_pos=legend_pos, colormap={label : marker})
+        
+class Fermi_Plot(Single_Line_Plot):
+    '''Class for producing Fermi-Dirac plots from species-wide aavs'''
+    def __init__(self, dataset, species, hotbit, precision=4):
+        predictions = dataset[get_family(species)][species].values() # pull out a list of aavs      
+        targets = [pred[hotbit] for pred in predictions]
+        targets.sort(reverse=True) # arrange target aavs in descending order       
+        
+        n_correct = sum(max(pred) == pred[hotbit] for pred in predictions) # "correct" defined to be when true identity is assigned the highest probability
+        n_total = len(predictions) 
+        self.score = round(n_correct/n_total, precision)
+        
+        super().__init__(normalized(targets), title=f'{species}, {n_correct}/{n_total} correct', marker='m-')
         
         
 # Bar Chart classes
