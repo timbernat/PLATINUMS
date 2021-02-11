@@ -133,6 +133,7 @@ class Overlaid_Family_RC(Base_RC):
         ax = axes[index]
         for fsd in self.famsds:
             fsd.draw(axes, index) # draw over one another
+        ax.set_title('Family Overlay')
             
         markers = [ax.scatter(np.nan, np.nan, color=color, marker=marker) for (color, marker) in self.marker_map.values()] # plot fake points for legend
         ax.legend(markers, self.marker_map.keys(), loc='lower right')
