@@ -3,7 +3,6 @@ Widgets, in the order they appear, are ConfirmButton, StatusBox, DynOptionMenu, 
 NumberedProgBar, LabelledEntry, Switch, GroupableCheck, CheckPanel, and SelectionWindow'''
 import tkinter as tk
 import tkinter.ttk as ttk
-import math # needed for ceiling function
 
 
 class ConfirmButton: 
@@ -225,8 +224,8 @@ class GroupableCheck:
         self.value = value
         self.output = output
         self.state = state
-        self.cb = tk.Checkbutton(frame, text=value, variable=self.var, onvalue=self.value, offvalue=None,
-                              state=self.state, command=self.edit_output) 
+        
+        self.cb = tk.Checkbutton(frame, text=value, variable=self.var, onvalue=self.value, offvalue=None, state=self.state, command=self.edit_output) 
         self.cb.grid(row=row, column=col, sticky='w')
         self.cb.deselect()
         
@@ -238,15 +237,18 @@ class GroupableCheck:
             
     def configure(self, **kwargs):
         self.cb.configure(**kwargs)
-            
+
+ceildiv = lambda a, b : -(a // -b) # ceiling analogue of floor division, useful for scaling grids by span
+
 class CheckPanel:
     '''A panel of GroupableChecks, allows for simple selectivity of the contents of some list. 
     Behaves like RadioButtons, except selection of multiple (or even all) buttons is allowedd'''
     def __init__(self, frame, data, output, default_state='normal', ncols=4, row_start=0, col_start=0):
-        self.output = output
-        self.state = default_state
-        self.row_span = math.ceil(len(data)/ncols)
-        self.panel = [ GroupableCheck(frame, val, output, state=self.state, row=row_start + i//ncols, col=col_start + i%ncols) for i, val in enumerate(data) ]
+        self.output   = output
+        self.state    = default_state
+        self.row_span = ceildiv(len(data), ncols)
+        
+        self.panel = [GroupableCheck(frame, val, output, state=self.state, row=row_start + i//ncols, col=col_start + i%ncols) for i, val in enumerate(data)]
         
     def wipe_output(self):
         self.output.clear()
@@ -273,14 +275,27 @@ class SelectionWindow:
     def __init__(self, main, parent_frame, selections, output, window_title='Select Members to Include', ncols=1):
         self.window = tk.Toplevel(main)
         self.window.title(window_title)
-        self.parent = parent_frame
         
+        self.parent = parent_frame     
         self.panel  = CheckPanel(self.window, selections, output, ncols=ncols)
-        self.button = tk.Button(self.window, text='Confirm Selection', command=self.confirm, bg='deepskyblue2', underline=0, padx=5)
-        self.button.grid(row=self.panel.row_span, column=ncols-1, sticky='nesw', padx=2, pady=2)
-        self.window.bind('c', lambda event : self.confirm()) # bind the confirmation command to the 'c' key
+        
+        self.confirm_button    = tk.Button(self.window, text='Confirm Selection', command=self.confirm, bg='deepskyblue2', underline=0, padx=5)
+        self.choose_all_button = tk.Button(self.window, text='Toggle All', command=self.toggle_all, underline=7, padx=15)
+        
+        self.confirm_button.grid(   row=self.panel.row_span, column=ncols-1, sticky='nesw', padx=2, pady=2)
+        self.choose_all_button.grid(row=self.panel.row_span, column=ncols-2, sticky='nesw', pady=2)
+        
+        self.window.bind('c', lambda event : self.confirm())    # bind the confirmation command to the 'c' key
+        self.window.bind('a', lambda event : self.toggle_all()) # bind the select all option to the 'a' key
+        
         self.parent.disable() # disable the parent to ensure no cross-binding occurs
 
+    def toggle_all(self):
+        '''Invert state of all checks in panel, making appropriate list changes in the process'''
+        for option in self.panel.panel:
+            option.cb.invoke()
+        
     def confirm(self):
+        '''Confirm selections and exit selection window'''
         self.parent.enable()
         self.window.destroy()
