@@ -26,7 +26,7 @@ def base_transform(source_path, operator=None, discriminator=lambda x : False, i
         if json_data['family_mapping'].keys() != json_data['families']: # if the families present have changed, must redo the family mapping as well
             json_data['family_mapping'] = one_hot_mapping(json_data['families']) # rebuild the family mapping
             for i, instance in enumerate(json_data['chem_data']):
-                json_data['chem_data'][i] = instance._replace(vector = json_data['family_mapping'][instance.family]) # reassign mapping vectors based on the new mapping         
+                json_data['chem_data'][i] = instance._replace(vector = json_data['family_mapping'][instance.family]) # reassign mapping vectors based on the new mapping     
     
     source_path = sanitized_path(source_path) # ensure Pathlike object pointing to json
     dest_path = source_path.parent/f'{source_path.stem}{indicator}.json'
@@ -46,6 +46,10 @@ def truncate(source_path, cutoff):
 def filterize(source_path, cutoff=0.5): 
     '''Removes all spectra whose maximum falls below a specified cutoff value'''
     base_transform(source_path, discriminator=lambda instance : max(instance.spectrum) < cutoff, indicator='(S)')    
+    
+def roundize(source_path, precision=6):
+    '''Rounds all spectral datapoints to the passed number of decimal places (default 6)'''
+    base_transform(source_path, operator=lambda spectrum : [round(i, precision) for i in spectrum], indicator='(R)')
     
 def name_filterize(source_path, species_list):
     '''Takes a list of species and removes all instances of each species from the dataset'''
@@ -131,9 +135,9 @@ def fourier(spectrum, cutoff=None):
     fft_spectrum = np.fft.hfft(spectrum)  # perform a Hermitian (real-valued) fast Fourier transform over the data
     if cutoff:
         fft_spectrum[cutoff:] = 0   # set everything above the cutoff to 0 (if cutoff is specified) to preserve spectrum size upon inverse tranform
-    return list(fft_spectrum) # must return as a list in order to be json serializable
+    return fft_spectrum.tolist() # must return as a list in order to be json serializable
 
-inv_fourier = lambda spectrum : list(np.fft.ihfft(spectrum).real) # returns real-valued inverse thransform as a serializable list
+inv_fourier = lambda spectrum : np.fft.ihfft(spectrum).real.tolist() # returns real-valued inverse thransform as a serializable list
 
 def fourierize(source_path, cutoff=None): # if no cutoff is given, will simply yield the full spectra
     '''Replaces spectra in a set with their Fourier Tranforms (Hermitian and real-valued)'''
