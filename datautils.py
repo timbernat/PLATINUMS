@@ -5,6 +5,25 @@ from pathlib import Path
 from iumsutils import *
 from plotutils import *
 
+
+indicators = { # registry of the indicators being used for various transforms for reference, to be used to prevent collisions
+    'roundize' : 'R', # method names as keys   
+    'filterize' : 'S', 
+    'reductize' : 'R--',
+    'duplicatize': 'D', 
+    'truncatize' : 'T',
+    'fourierize' : 'FT<cutoff>',
+    'positivize' : '+',
+    'logarithmize' : 'L',
+    'inv_fourierize' : 'IFT<cutoff>',
+    'name_filterize' : 'N',
+    'inv_fourierize' : 'IFT<cutoff>',
+    'mode1_filterize' : 'SM1',
+    'fourier_filterize' : 'SFT<cutoff>',
+    'intensity_filterize' : 'I',
+    'baseline_standardize' : 'B<baseval>'    
+}
+
 # data transformation methods (for jsons only). NOTE: actual transforms will always end in the suffiz "-ize", while any helper methods will not
 def base_transform(source_path, operator=None, discriminator=lambda x : False, indicator='', **opargs):
     '''The base method for transforming data, takes a .json data file name, an optional operator to modify spectra (takes spectra and optional arguments),
@@ -39,7 +58,7 @@ def duplicate(source_path):
     '''Makes a duplicate of a json dataset in the same directory'''
     base_transform(source_path, indicator='(D)') # with no operator or discriminator, all items are copied verbatim
     
-def truncate(source_path, cutoff):
+def truncatize(source_path, cutoff):
     '''Truncates all spectra below some cutoff'''
     base_transform(source_path, operator=lambda spectrum : spectrum[:cutoff], indicator='(T)')
           
@@ -62,16 +81,24 @@ def baseline_standardize(source_path, lower=0, upper=20, base_value=0): # if a n
     
 
 # transforms that require helper methods, usually to gain extra info from the whole dataset    
-def get_RIP_cutoffs(source_path, lb=0.15, ub=0.95):
-    '''Takes a dataset and normalized cutoff bounds and returns the RIP values, for each species, which correspond to those bounds'''  
-    json_data = load_chem_json(source_path)
+def norm_index(source_path, operator, lower_bound=0.15, upper_bound=0.95):
+    '''Takes a dataset, an operation to apply over spectra, and normalized cutoff bounds and
+    returns a dict (by species) of the ranges of data falling within those normalized bounds'''  
+    if not (0 <= lower_bound < 1) or not (0 < upper_bound <= 1): # some error checking to ensure that the imposed limits make sense
+        raise ValueError('Limit(s) should be between 0 and 1')
+    elif lower_bound > upper_bound:
+        raise ValueError('Limits are mismatched')
     
-    RIP_cutoffs = {}
+    json_data = load_chem_json(source_path)  
+    
+    bounds = {}
     for species in json_data['species']:
-        RIPs = sorted(get_RIP(instance.spectrum) for instance in json_data['chem_data'] if instance.species == species)
-        lower_cutoff, *middle, upper_cutoff = [val for val, norm_val in zip(RIPs, normalized(RIPs)) if lb < norm_val < ub]
-        RIP_cutoffs[species] = (lower_cutoff, upper_cutoff)        
-    return RIP_cutoffs
+        op_spectra = sorted(operator(instance.spectrum)
+                                for instance in json_data['chem_data']
+                                    if instance.species == species) # operate over all instances of a species
+        lower_cutoff, *middle, upper_cutoff = [val for val, norm_val in zip(op_spectra, normalized(op_spectra)) if lower_bound < norm_val < upper_bound] # discard middle values
+        bounds[species] = (lower_cutoff, upper_cutoff)        
+    return bounds
 
 def mode1_filterize(source_path, lower_bound=0.15, upper_bound=0.95):
     '''Filtering regime specific to Mode 1, will not work with other Modes, and Mode 1 sets should not be used with other filtering regimes.
@@ -79,13 +106,13 @@ def mode1_filterize(source_path, lower_bound=0.15, upper_bound=0.95):
     if 'Mode 1' not in str(source_path): # ensure this transform is not applied to data for which it is not compatible
         raise TypeError('File is not a Mode 1 dataset')
         
-    if not (0 < lower_bound < 1) or not (0 < upper_bound < 1): # some error checking to ensure that the imposed limits make sense
-        raise ValueError('Limit(s) should be between 0 and 1')
-    elif lower_bound > upper_bound:
-        raise ValueError('Limits are mismatched')
-        
-    limits = get_RIP_cutoffs(source_path, lb=lower_bound, ub=upper_bound) # the dictionary of the RIP cutoffs by species
-    base_transform(source_path, discriminator=lambda instance : not (limits[instance.species][0] < get_RIP(instance.spectrum) < limits[instance.species][1]), indicator='(SM1)')
+    RIP_cutoffs = norm_index(source_path, get_RIP, lower_bound=lower_bound, upper_bound=upper_bound) # the dictionary of the RIP cutoffs by species
+    base_transform(source_path, discriminator=lambda instance : not (RIP_cutoffs[instance.species][0] < get_RIP(instance.spectrum) < RIP_cutoffs[instance.species][1]), indicator='(SM1)')
+    
+def intensity_filterize(source_path, cutoff=0.3):
+    '''More sophisticated version of filterize, removes all spectra below some intensity on the basis of a normalized cutoff'''
+    max_cutoffs = norm_index(source_path, max, lower_bound=cutoff, upper_bound=1) # only care about removing those below the cutoff (upper bound will always be 1)
+    base_transform(source_path, discriminator=lambda instance : not (max_cutoffs[instance.species][0] < max(instance.spectrum) < max_cutoffs[instance.species][1]), indicator='(I)')
     
 
 def get_reduction_listing(source_path, lower_cap=60, upper_cap=80):
@@ -106,7 +133,7 @@ def get_reduction_listing(source_path, lower_cap=60, upper_cap=80):
 def reductize(source_path, lower_cap=60, upper_cap=80):
     '''Reduces a dataset such that no species has more than the "upper_cap" amount of instances, in a doubly-random and bias-free way'''
     instances_to_keep = get_reduction_listing(source_path, lower_cap=lower_cap, upper_cap=upper_cap)
-    base_transform(source_path, discriminator=lambda instance : instance.name not in instances_to_keep, indicator='(R)')
+    base_transform(source_path, discriminator=lambda instance : instance.name not in instances_to_keep, indicator='(R--)')
 
     
 fold = lambda chem_data, funct, **kwargs : funct((funct(instance.spectrum, **kwargs) for instance in chem_data), **kwargs) # useful for finding single smallest point in a dataset, for example
