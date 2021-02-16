@@ -163,7 +163,7 @@ def inspect_spectra(source_path, species, ncols=6, save_path=None, marker='c-'):
     if species not in json_data['species']:
         raise ValueError(f'Species "{species}" not in dataset')
 
-    plots = [Single_Line_Plot(instance.spectrum, title=instance.name, colormap={'spectrum' : marker}) 
+    plots = [Single_Line_Plot(instance.spectrum, title=instance.name, marker=marker) 
                  for instance in json_data['chem_data']
                      if instance.species == species] 
     
