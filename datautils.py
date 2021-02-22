@@ -18,9 +18,9 @@ indicators = { # registry of the indicators being used for various transforms fo
     'inv_fourierize' : 'IFT<cutoff>',
     'name_filterize' : 'N',
     'inv_fourierize' : 'IFT<cutoff>',
-    'mode1_filterize' : 'SM1',
+    'mode1_filterize' : 'SM1<norm_range>',
     'fourier_filterize' : 'SFT<cutoff>',
-    'intensity_filterize' : 'I',
+    'intensity_filterize' : 'I<cutoff>',
     'baseline_standardize' : 'B<baseval>'    
 }
 
@@ -107,12 +107,12 @@ def mode1_filterize(source_path, lower_bound=0.15, upper_bound=0.95):
         raise TypeError('File is not a Mode 1 dataset')
         
     RIP_cutoffs = norm_index(source_path, get_RIP, lower_bound=lower_bound, upper_bound=upper_bound) # the dictionary of the RIP cutoffs by species
-    base_transform(source_path, discriminator=lambda instance : not (RIP_cutoffs[instance.species][0] < get_RIP(instance.spectrum) < RIP_cutoffs[instance.species][1]), indicator='(SM1)')
+    base_transform(source_path, discriminator=lambda instance : not (RIP_cutoffs[instance.species][0] < get_RIP(instance.spectrum) < RIP_cutoffs[instance.species][1]), indicator=f'(SM1 {int(lower_bound*100)}-{int(upper_bound*100)})')
     
 def intensity_filterize(source_path, cutoff=0.3):
     '''More sophisticated version of filterize, removes all spectra below some intensity on the basis of a normalized cutoff'''
     max_cutoffs = norm_index(source_path, max, lower_bound=cutoff, upper_bound=1) # only care about removing those below the cutoff (upper bound will always be 1)
-    base_transform(source_path, discriminator=lambda instance : not (max_cutoffs[instance.species][0] < max(instance.spectrum) < max_cutoffs[instance.species][1]), indicator='(I)')
+    base_transform(source_path, discriminator=lambda instance : not (max_cutoffs[instance.species][0] < max(instance.spectrum) < max_cutoffs[instance.species][1]), indicator=f'(I-{int(100*cutoff)})')
     
 
 def get_reduction_listing(source_path, lower_cap=60, upper_cap=80):
@@ -153,7 +153,7 @@ def logarithmize(source_path):
         raise TypeError('Transform must be performed over baseline-standardized data')       
     chem_data = load_chem_json(source_path)['chem_data']    
     eps_baseline = -fold(chem_data, min) + np.finfo(float).eps # the minimum non-biased/equitable baseline that guarantees all data are positive    
-    base_transform(source_path, operator=lambda spectrum : [math.log(point + eps_baseline) for point in spectrum], indicator='(L)')
+    base_transform(source_path, operator=lambda spectrum : [math.log(point + eps_baseline) for point in spectrum], indicator='(L)') 
     
     
 # Fourier-Transform transformation methods
