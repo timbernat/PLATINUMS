@@ -20,7 +20,7 @@ from sklearn.model_selection import train_test_split
 
 import tensorflow as tf     # Neural Net Libraries
 from tensorflow.keras import metrics                  
-from tensorflow.keras.optimizers import Adam
+from tensorflow.keras.optimizers import Adam, RMSprop
 from tensorflow.keras.models import Sequential, load_model
 from tensorflow.keras.layers import Dense, Dropout
 from tensorflow.keras.callbacks import EarlyStopping, Callback
@@ -299,6 +299,7 @@ class PLATINUMS_App:
                                     self.slice_dec_entry : 'slice_decrement',
                                     self.n_slice_entry : 'num_slices'}
         self.entry_mapping = {**self.hp_entry_mapping, **self.slice_entry_mapping} # merged internal dict of all entries present  
+        self.field_mapping = {**self.entry_mapping, **self.switch_mapping} # merged internal dict of all field which can be filled out within the app
         
         self.main.bind('<Key>', self.key_in_input) # activate internal conditional hotkey binding
         self.reset() # set menu to default configuration
@@ -375,11 +376,8 @@ class PLATINUMS_App:
         for array in self.arrays:
             array.clear()
         
-        for switch in self.switch_mapping.keys():
-            switch.disable()
-        
-        for entry in self.entry_mapping.keys():
-            entry.reset_default()   
+        for field in self.field_mapping.keys():
+            field.reset_default() # reset defaults for all switches and entries  
         
         self.lift() # bring main window to forefront
         self.isolate(self.input_frame)
@@ -411,7 +409,7 @@ class PLATINUMS_App:
                     json_data = iumsutils.load_chem_json(self.data_path/f'{file}.json')
                     for data_property in ('spectrum_size', 'species', 'families', 'family_mapping'):
                         self.main.update() # update main wndow every cycle to ensure window/cursor doesn't freeze during checking
-                        if not getattr(self, data_property): # check if the fields are empty, relies on attribute names being same as json keys - note lack fo default attr
+                        if not getattr(self, data_property): # check if the fields are empty, relies on attribute names being same as json keys - note lack of default attr
                             setattr(self, data_property, json_data[data_property])
                         else:
                             if data_property == 'spectrum_size':
@@ -425,35 +423,29 @@ class PLATINUMS_App:
     
     def confirm_input_mode(self):
         '''Performs final check over input and determines how to proceed appropriately'''
-        if self.input_mode.get() == 'Manual Input':
-            self.main.config(cursor='wait') # this make take a moment for large sets of files, indicate to user (via cursor) to be patient
-            self.check_input_files()
-            self.main.config(cursor='') # return cursor to normal
-            self.isolate(self.selection_frame) 
-        elif self.input_mode.get() == 'Preset from File':
-            try: # filling in all the fields in the GUI based on the selected preset
-                self.main.config(cursor='wait') # this make take a moment for large sets of files, indicate to user (via cursor) to be patient
-                self.check_input_files()
-                self.confirm_selections() # handles the case when family or all are passed explicitly as selections  
-                self.read_mode.set(self.parameters['read_mode'])
-
-                for switch, param in self.switch_mapping.items():
-                    switch.apply_state(self.parameters[param]) # configure all the switch values in the GUI
-
-                for entry, param in self.entry_mapping.items():
-                    entry.set_value(self.parameters[param]) # configure all the entry values in the GUI
-
-                self.check_trimming_bounds() # ensure that bounds actually make sense  
-                self.main.config(cursor='') # return cursor to normal
-                self.isolate(self.activation_frame)
-            except KeyError as error: # gracefully handle the case when the preset does not contain the correct names
-                messagebox.showerror('Preset Error', f'The parameter "{error}" is either missing or misnamed;\n Please check preset file for errors') 
-                self.reset()
-                
-        else:
+        if self.input_mode.get() not in ('Manual Input', 'Preset from File'):
             messagebox.showerror('No input mode selected!', 'Please choose either "Manual" or "Preset" input mode')
             self.reset()
-                    
+        else:
+            self.main.config(cursor='wait') # this make take a moment for large sets of files, indicate to user (via cursor) to be patient
+            self.check_input_files()
+            
+            if self.input_mode.get() == 'Manual Input':                
+                self.isolate(self.selection_frame)
+            elif self.input_mode.get() == 'Preset from File': # could simply leave as "else", but is more explicit as is
+                self.confirm_selections() # handles the case when family or all are passed explicitly as selections  
+                
+                self.read_mode.set(self.parameters['read_mode'])
+                for field, param in self.field_mapping.items():
+                    try:
+                        field.set_value(self.parameters[param]) # configure all the switch values in the GUI
+                    except KeyError as error:
+                        messagebox.showerror('Preset Error', f'The parameter "{error}" is either missing or misnamed;\n Please check preset file for errors') 
+                        break
+
+                self.check_trimming_bounds() # ensure that bounds actually make sense  
+                self.isolate(self.activation_frame)
+            self.main.config(cursor='') # return cursor to normal
         
     # Frame 1 (Evaluand Selection) Methods
     def further_sel(self): 
@@ -524,34 +516,12 @@ class PLATINUMS_App:
         self.isolate(self.activation_frame) # make the training button clickable if all goes well
              
     # Frame 5: the training routine itself, this is where the magic happens
-    def training(self, test_set_proportion=0.2, keras_verbosity=0): # use keras_verbosity of 2 for lengthy and detailed console printouts
-        '''The function defining the neural network training sequence and parameters'''
-        # UNPACKING INTERNAL PARAMETERS DICT AND INITIALIZING SOME VALUES
-        overall_start_time = time() # get start of runtime for entire training routine
-        plotutils.Base_RC.unit_circle = plotutils.Mapped_Unit_Circle(self.family_mapping) # set mapping for radar charts
-        
-        data_files       = self.parameters['data_files'] # shadow names to reduce number of lookups and for better code readability
-        selections      = self.parameters['selections'] 
-        num_epochs      = self.parameters['num_epochs'] 
-        batchsize       = self.parameters['batchsize']
-        learnrate       = self.parameters['learnrate'] 
-         
-        slice_decrement = self.parameters['slice_decrement'] 
-        trimming_min    = self.parameters['trimming_min'] 
-        n_slices        = self.parameters['num_slices'] + 1 # accounts for 0 indexing, makes input easier to understand
-        
-        cycle_fams      = self.parameters['cycle_fams']
-        fam_training    = self.parameters['fam_training']
-        save_weights    = self.parameters['save_weights']
-        early_stopping  = self.parameters['early_stopping']      
-
-        # FILE MANAGEMENT CODE, GUARANTEES THAT NO ACCIDENTAL OVERWRITES OCCUR AND THAT AN APPROPRIATE EMPTY FOLDER EXISTS TO WRITE RESULTS TO
+    def prepare_result_folder(self, default_name=''):
+        '''Handles folder naming and overwriting pre-training to guarantee results have a unique folder into which they can be written'''
         parent_name = simpledialog.askstring(title='Set Result Folder Name', prompt='Please enter a name to save training results under:',
-                                             initialvalue=f'{num_epochs} epoch, {cycle_fams and "cycled" or (fam_training and "familiar" or "unfamiliar")}')   
-        if not parent_name: # if user cancel operation or leaves field blank, reset train option
-            self.activation_frame.enable()
-            return
-            
+                                             initialvalue=default_name)   
+        if not parent_name: # if user cancels operation or leaves field blank, return and do not proceed with training
+            return            
         else:  # otherwise, begin file checking loop  
             parent_folder = self.save_path/parent_name # same name applied to Path object, useful for incrementing file_id during overwrite checking
             file_id = 0
@@ -572,25 +542,53 @@ class PLATINUMS_App:
                             continue # return to start of checking loop
 
                     # this branch is only executed if no preset file is found OR (implicitly) if the existing preset matches the one found
-                    if messagebox.askyesno('Request Overwrite', 'Folder with same name and same (or no) training parameters found; Allow overwrite of folder?'):
+                    if messagebox.askyesno('Request Overwrite', 'Folder with same name and training parameters found; Allow overwrite of folder?'):
                         try:
                             iumsutils.clear_folder(parent_folder) # empty the folder if permission is given
                             break
                         except PermissionError: # if emptying fails because user forgot to close files, notify them and exit training loop
-                            messagebox.showerror('Overwrite Error!', f'{parent_folder}\nhas file(s) open and cannot be \
-                                                  overwritten;\n\nPlease close all files and try training again')
-                    self.activation_frame.enable()
-                    return # final return branch executed in all cases except where user allows overwrite AND it is successful
+                            messagebox.showerror('Overwrite Error!', f'Cannot overwrite {parent_folder}\nwhile file(s) are still open;\n\nPlease close files, then try again')
+                    else:
+                        return # return None if overwrite is not allowed
+            return parent_folder # return path-like object pointing to folder if successful
+    
+    def training(self, test_set_proportion=0.2, keras_verbosity=0): # use keras_verbosity of 2 for lengthy and detailed console printouts
+        '''The function defining the neural network training sequence and parameters'''
+        overall_start_time = time() # get start of runtime for entire training routine
+        plotutils.Base_RC.set_uc_mapping(self.family_mapping) # set unit circle mapping for radar charts
+        
+        # SHADOWING PARAMETER NAMES INTERNALLY TO EASE READABILITY AND REDUCE NUMBER OF LOOKUPS
+        data_files      = self.parameters['data_files'] 
+        selections      = self.parameters['selections'] 
+        num_epochs      = self.parameters['num_epochs'] 
+        batchsize       = self.parameters['batchsize']
+        learnrate       = self.parameters['learnrate'] 
+         
+        slice_decrement = self.parameters['slice_decrement'] 
+        trimming_min    = self.parameters['trimming_min'] 
+        n_slices        = self.parameters['num_slices'] + 1 # accounts for 0 indexing, makes input-->code easier to understand
+        
+        cycle_fams      = self.parameters['cycle_fams']
+        fam_training    = self.parameters['fam_training']
+        save_weights    = self.parameters['save_weights']
+        early_stopping  = self.parameters['early_stopping']      
+
+        # FILE MANAGEMENT, GUARANTEES THAT NO ACCIDENTAL OVERWRITES OCCUR AND THAT AN APPROPRIATE EMPTY FOLDER EXISTS TO WRITE RESULTS TO
+        parent_folder = self.prepare_result_folder(default_name=f'{num_epochs} epoch, {cycle_fams and "cycled" or (fam_training and "familiar" or "unfamiliar")}')
+        if not parent_folder: # if file determination returns empty due to user cancellation/omission, exit training routine
+            return
                 
         preset_path = parent_folder/'Training Preset.json'
         with preset_path.open(mode='w') as preset_file: 
             json.dump(self.parameters, preset_file) # save current training settings to a preset for reproducability
-            
+        
+        # PREPARING GUI FOR TRAINING
         self.activation_frame.disable()     # disable training button while training (an idiot-proofing measure)                 
         train_window = TrainingWindow(self) # pass the GUI app to the training window object to allow for menu manipulation        
         train_window.round_progress.set_max(len(selections)*n_slices*(1 + cycle_fams)) # compute and display the number of training rounds to occur
         train_window.file_num_progress.set_max(len(data_files))
         
+        # INJECTING KERAS CALLBACKS TO REGULATE AND INDEX TRAINING
         keras_callbacks = [TkEpochs(train_window)] # in every case, add the tkinter-keras interface callback to the callbacks list
         if early_stopping:
             early_stopping_callback = EarlyStopping(monitor='loss', mode='min', verbose=keras_verbosity, patience=16, restore_best_weights=True) # fine-tune patience, eventually
@@ -618,7 +616,7 @@ class PLATINUMS_App:
                 
                 fam_training = (self.parameters['fam_training'] ^ familiar_cycling) # xor used to encode the inversion behavior on second cycle    
                 fam_str = f'{fam_training and "F" or "Unf"}amiliar'  
-                self.fam_switch.apply_state(fam_training)        # purely cosmetic, but allows the user to see that cycling is in fact occurring
+                self.fam_switch.set_value(fam_training)        # purely cosmetic, but allows the user to see that cycling is in fact occurring
                 train_window.set_familiar_status(fam_str)
 
                 curr_fam_folder = results_folder/fam_str # folder with the results from the current (un)familiar training, parent for all that follow 
@@ -666,11 +664,12 @@ class PLATINUMS_App:
 
                             with tf.device('CPU:0'):     # eschews the requirement for a brand-new NVIDIA graphics card (which we don't have anyways)                      
                                 model = Sequential()     # model block is created, layers are added to this block
-                                model.add(Dense(256, input_dim=(upper_bound - lower_bound), activation='relu'))  # 512 neuron input layer, size depends on trimming
-                                model.add(Dropout(0.5))                                          # dropout layer, to reduce overfit
-                                model.add(Dense(256, activation='relu'))                         # 512 neuron hidden layer
+                                model.add(Dense(150, input_dim=(upper_bound - lower_bound), activation='tanh'))  # 512 neuron input layer, size depends on trimming
+                                #model.add(Dropout(0.5))                                          # dropout layer, to reduce overfit
+                                #model.add(Dense(256, activation='relu'))                         # 512 neuron hidden layer
                                 model.add(Dense(len(self.family_mapping), activation='softmax')) # softmax gives probability distribution of identity over all families
-                                model.compile(loss='categorical_crossentropy', optimizer=Adam(lr=learnrate), metrics=['accuracy']) 
+                                #model.compile(loss='categorical_crossentropy', optimizer=Adam(lr=learnrate), metrics=['accuracy']) 
+                                model.compile(loss='categorical_crossentropy', optimizer=RMSprop(lr=learnrate), metrics=['accuracy']) 
 
                             hist = model.fit(x_train, y_train, validation_data=(x_test, y_test), callbacks=keras_callbacks, # actual model training occurs here
                                              verbose=keras_verbosity, epochs=num_epochs, batch_size=batchsize)
@@ -732,7 +731,7 @@ class PLATINUMS_App:
                     with prediction_path.open(mode='w', newline='') as pred_file:
                         json.dump(predictions, pred_file) # save the aavs for the current training
 
-                    plotutils.single_plot(plotutils.Overlaid_Family_RC(predictions), curr_slice_folder/'Overall Summary', figsize=8) # save family-overlaid RC as visual result summary
+                    plotutils.single_plot(plotutils.Overlaid_Family_RC(predictions, title=f'{data_file} Overall Summary'), curr_slice_folder/'Overall Summary', figsize=8) # save family-overlaid RC as visual result summary
                            
                     score_file_path = curr_slice_folder/f'{fam_str} Scores.csv'
                     iumsutils.add_csv_column(score_file_path, row_labels)
@@ -761,8 +760,10 @@ class PLATINUMS_App:
                 unfam_path.unlink() # delete the unfamiliar file after copying the contents
                 fam_path.rename(fam_path.parent/f'Compiled Results - {point_range}.csv' )  # get rid of "Familiar" affix after merging
         
+        self.activation_frame.enable() # re-enable training button to allow for smooth retraining
         train_window.button_frame.enable()  # open up post-training options in the training window
         train_window.abort_button.configure(state='disabled') # disable the abort button (idiotproofing against its use after training)
+        
         train_window.set_status(f'Finished in {iumsutils.format_time(time() - overall_start_time)}') # display the time taken for all trainings in the training window
         if messagebox.askyesno('Training Completed Succesfully!', 'Training finished; view training results in folder?', parent=train_window.training_window):
             os.startfile(parent_folder) # notify user that training has finished and prompt them to view the results in situ
