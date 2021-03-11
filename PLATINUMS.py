@@ -664,12 +664,12 @@ class PLATINUMS_App:
 
                             with tf.device('CPU:0'):     # eschews the requirement for a brand-new NVIDIA graphics card (which we don't have anyways)                      
                                 model = Sequential()     # model block is created, layers are added to this block
-                                model.add(Dense(150, input_dim=(upper_bound - lower_bound), activation='tanh'))  # 512 neuron input layer, size depends on trimming
-                                #model.add(Dropout(0.5))                                          # dropout layer, to reduce overfit
-                                #model.add(Dense(256, activation='relu'))                         # 512 neuron hidden layer
+                                model.add(Dense(256, input_dim=(upper_bound - lower_bound), activation='relu'))  # 256 neuron input layer, size depends on trimming
+                                model.add(Dropout(0.5))                                          # dropout layer, to reduce overfit
+                                model.add(Dense(256, activation='relu'))                         # 256 neuron hidden layer
                                 model.add(Dense(len(self.family_mapping), activation='softmax')) # softmax gives probability distribution of identity over all families
-                                #model.compile(loss='categorical_crossentropy', optimizer=Adam(lr=learnrate), metrics=['accuracy']) 
-                                model.compile(loss='categorical_crossentropy', optimizer=RMSprop(lr=learnrate), metrics=['accuracy']) 
+                                model.compile(loss='categorical_crossentropy', optimizer=Adam(lr=learnrate), metrics=['accuracy']) 
+                                #model.compile(loss='categorical_crossentropy', optimizer=RMSprop(lr=learnrate), metrics=['accuracy']) 
 
                             hist = model.fit(x_train, y_train, validation_data=(x_test, y_test), callbacks=keras_callbacks, # actual model training occurs here
                                              verbose=keras_verbosity, epochs=num_epochs, batch_size=batchsize)
