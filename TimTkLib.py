@@ -144,14 +144,16 @@ class ToggleFrame(tk.LabelFrame):
 class LabelledEntry:
     '''An entry with an adjacent label to the right. Use "self.get_value()" method to retrieve state of
     variable. Be sure to leave two columns worth of space for this widget'''
-    def __init__(self, frame, text, var, state='normal', default=None, underline=None, width=10, row=0, col=0):
-        self.default = default
-        self.var = var
-        self.reset_default()
+    def __init__(self, frame, text, var, state='normal', default=None, underline=None, width=10, row=0, col=0):           
         self.label = tk.Label(frame, text=text, padx=2, underline=underline, state=state)
         self.label.grid(row=row, column=col, sticky='w')
+        
+        self.var = var
         self.entry = tk.Entry(frame, width=width, textvariable=self.var, state=state)
         self.entry.grid(row=row, column=col+1)
+        
+        self.default = default
+        self.reset_default()
         
     def get_value(self):
         return self.var.get()
@@ -169,8 +171,8 @@ class LabelledEntry:
     
 class Switch: 
     '''An interactive switch button, clicking inverts the boolean state and status display. State can be accessed via the <self>.value attribute'''
-    def __init__(self, frame, text, default_value=False, dep_state='normal', dependents=None, underline=None, width=10, 
-                 on_text='Enabled', on_color='green2', off_color='red', off_text='Disabled', row=0, col=0,):
+    def __init__(self, frame, text, default=False, dep_state='normal', dependents=None, underline=None, width=10, 
+                 on_text='Enabled', on_color='green2', off_color='red', off_text='Disabled', row=0, col=0):
         self.label = tk.Label(frame, text=text, underline=underline)
         self.label.grid(row=row, column=col)
         self.switch = tk.Button(frame, width=width, command=self.toggle)
@@ -183,31 +185,31 @@ class Switch:
     
         self.dependents = dependents
         self.dep_state = dep_state
-        self.value = default_value
-        self.apply_state(default_value)
-    
-    def get_text(self):
-        return self.value and self.on_text or self.off_text
-        
-    def get_color(self):
-        return self.value and self.on_color or self.off_color
+        self.value = None
+        self.default = default
+        self.reset_default()
     
     def get_value(self):
         return self.value
     
-    def apply_state(self, value):
+    def set_value(self, value):
         self.value = value
-        self.dep_state = (self.value and 'normal' or 'disabled')
-        self.switch.configure(text=self.get_text(), bg=self.get_color())
+        state, text, color = self.value and ('normal', self.on_text, self.on_color) or ('disabled', self.off_text, self.off_color)
+        
+        self.switch.configure(text=text, bg=color)
+        self.dep_state = state
         if self.dependents:
             for widget in self.dependents:
                 widget.configure(state=self.dep_state)
                 
+    def reset_default(self):
+        self.set_value(self.default)
+                
     def enable(self):
-        self.apply_state(True)
+        self.set_value(True)
      
     def disable(self):
-        self.apply_state(False)
+        self.set_value(False)
     
     def toggle(self):
         if self.value:
