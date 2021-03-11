@@ -61,7 +61,7 @@ class Mapped_Unit_Circle:
         ax.plot(*self.circle, 'k-')
         for i, (label, pole) in enumerate(zip(self.labels, self.poles)): # pass the poles and axes to the internal unit circle
             x, y = pole.real, pole.imag # unpack components f values
-            ax.plot(x, y, 'ro')        # plot the roots of unity
+            #ax.plot(x, y, 'ro')        # plot the roots of unity
             ax.plot([0, x], [0, y], 'y--')  # plot radial lines to each root
             ax.annotate(label, (x, y), ha='center') # label each root with the associated family, center horizontally
 
@@ -69,6 +69,10 @@ class Base_RC:
     '''Base Radar Chart class. Builds unit circle based on species mapping, can plot set of point along with unreduced centroid'''     
     unit_circle = None # !!CRITICAL!! - must set mapping for class prior to use
     
+    @classmethod
+    def set_uc_mapping(cls, mapping): # sets background unit circle mapping for class - !!NOTE!! must be prior to use in order for RCs to work
+        cls.unit_circle = Mapped_Unit_Circle(mapping)
+        
     def __init__(self, title, points, point_marker='gx', centroid_marker='b*'):
         self.title = title
         self.points = points
@@ -76,11 +80,11 @@ class Base_RC:
         self.point_marker = point_marker
         self.centroid = sum(self.points)/len(points)
         self.centroid_marker = centroid_marker
-            
-    def plot_point(self, coords, ax, marker='ro'):
+   
+    def plot_point(self, coords, ax, marker='ro', size=6):
         if type(coords) != tuple:
             coords = (coords.real, coords.imag)
-        ax.plot(*coords, marker) 
+        ax.plot(*coords, marker, markersize=size) 
         
     def draw(self, axes, index=(0,0)):
         ax = axes[index] # index subplots within the passed plt.Axes object
@@ -93,7 +97,7 @@ class Base_RC:
             self.plot_point(point, ax, marker=self.point_marker)
             
         if self.centroid_marker: # only plot the centroid if it is called for
-            self.plot_point(self.centroid, ax, marker=self.centroid_marker)
+            self.plot_point(self.centroid, ax, marker=self.centroid_marker, size=14)
             
 class Instance_RC(Base_RC):
     '''0-order Radar Chart class for plotting the axial components and single centroid of a single instance'''
@@ -115,29 +119,39 @@ class Family_RC(Base_RC):
     def __init__(self, dataset, family, point_marker='m*', centroid_marker='cs'):
         spec_centroids = [Species_RC(dataset, species).centroid for species in dataset[family]]
         super().__init__(family, spec_centroids, point_marker, centroid_marker)
-        
+
 class Overlaid_Family_RC(Base_RC):
     '''2.5-order Radar Chart class for plotting all families on a single diagram, color-coded '''
-    marker_map  = {
-        'Acetates': 'g^',
-        'Alcohols': 'r^',
-        'Aldehydes': 'y^',
-        'Ethers': 'b^',
-        'Ketones': 'm^'
+    colors  = {
+        'Acetates' : 'g',
+        'Alcohols' : 'r',
+        'Aldehydes': 'c',
+        'Ethers'   : 'b',
+        'Ketones'  : 'm'
     }
+    point_marker = '^'
+    centroid_marker = 'x'
     
-    def __init__(self, dataset):
-        self.famsds = [Family_RC(dataset, family, point_marker=self.marker_map[family]) for family in dataset]
+    def __init__(self, dataset, title='Family Overlay'):
+        self.title = title
+        self.famsds = [Family_RC(dataset, family, point_marker=self.colors[family]+self.point_marker, 
+                                                  centroid_marker=self.colors[family]+self.centroid_marker) for family in dataset]
     
     def draw(self, axes, index=(0,0)):
         ax = axes[index]
         for fsd in self.famsds:
             fsd.draw(axes, index) # draw over one another
-        ax.set_title('Family Overlay')
+        ax.set_title(self.title)
             
-        markers = [ax.scatter(np.nan, np.nan, color=color, marker=marker) for (color, marker) in self.marker_map.values()] # plot fake points for legend
-        ax.legend(markers, self.marker_map.keys(), loc='lower right')
+        markers = [ax.scatter(np.nan, np.nan, color=color, marker=self.point_marker) for color in self.colors.values()] # plot fake points for legend
+        ax.legend(markers, self.colors.keys(), loc='lower right')
 
+class Macro_RC(Base_RC):
+    '''3-order Radar Chart from plotting trends across all data'''
+    def __init__(self, dataset, point_marker='cs', centroid_marker='gp'):
+        fam_centroids = [Family_RC(dataset, family).centroid for family in dataset]
+        super().__init__('All Families', fam_centroids, point_marker, centroid_marker) 
+        
 class Macro_RC(Base_RC):
     '''3-order Radar Chart from plotting trends across all data'''
     def __init__(self, dataset, point_marker='cs', centroid_marker='gp'):
