@@ -116,6 +116,8 @@ class ToggleFrame(tk.LabelFrame):
     def __init__(self, window, text, default_state='normal', padx=5, pady=5, row=0, col=0):
         tk.LabelFrame.__init__(self, window, text=text, padx=padx, pady=pady, bd=2, relief='groove')
         self.grid(row=row, column=col)
+        
+        self.main = window
         self.state = default_state
         self.apply_state(default_state)
     
@@ -144,17 +146,19 @@ class ToggleFrame(tk.LabelFrame):
 class LabelledEntry:
     '''An entry with an adjacent label to the right. Use "self.get_value()" method to retrieve state of
     variable. Be sure to leave two columns worth of space for this widget'''
-    def __init__(self, frame, text, var, state='normal', default=None, underline=None, width=10, row=0, col=0):           
-        self.label = tk.Label(frame, text=text, padx=2, underline=underline, state=state)
-        self.label.grid(row=row, column=col, sticky='w')
-        
+    def __init__(self, frame, text, var, state='normal', default=None, underline=None, width=10, spacing=(0,0), row=0, col=0):           
         self.var = var
-        self.entry = tk.Entry(frame, width=width, textvariable=self.var, state=state)
-        self.entry.grid(row=row, column=col+1)
+        
+        left, right = spacing # unpack padding to be placed on either side of the object
+        self.label = tk.Label(frame, text=text, padx=2, underline=underline, state=state)
+        self.entry = tk.Entry(frame, width=width, textvariable=self.var, state=state, validate='all', validatecommand=((frame.main.register(self.callback)), '%P'))
+        
+        self.label.grid(row=row, column=col,   sticky='w', padx=(left, 0))  # entry and label will always touch, regardless of other parameters
+        self.entry.grid(row=row, column=col+1, sticky='w', padx=(0, right)) # entry occupies column adjacent to label
         
         self.default = default
         self.reset_default()
-        
+    
     def get_value(self):
         return self.var.get()
     
@@ -163,6 +167,9 @@ class LabelledEntry:
     
     def reset_default(self):
         self.var.set(self.default)
+        
+    def callback(self, P): # restricts input to integers
+        return (str.isdigit(P) or P == '')
     
     def configure(self, **kwargs):   # allows for disabling in ToggleFrames
         self.label.configure(**kwargs)
