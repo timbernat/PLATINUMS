@@ -23,7 +23,7 @@ from tensorflow.keras import metrics
 from tensorflow.keras.optimizers import Adam, RMSprop
 from tensorflow.keras.models import Sequential, load_model
 from tensorflow.keras.layers import Dense, Dropout
-from tensorflow.keras.callbacks import EarlyStopping, Callback
+from tensorflow.keras.callbacks import Callback
 tf.get_logger().setLevel('ERROR') # suppress deprecation warnings which seem to riddle tensorflow
 
 
@@ -31,7 +31,7 @@ tf.get_logger().setLevel('ERROR') # suppress deprecation warnings which seem to 
 class TkEpochs(Callback):   
     '''A custom keras Callback which interfaces between the training window and the Keras model training session'''
     def __init__(self, training_window):
-        super(TkEpochs, self).__init__()
+        super(Callback, self).__init__()
         self.tw = training_window
     
     def on_epoch_begin(self, epoch, logs=None): # update the epoch progress bar at the start of each epoch
@@ -42,6 +42,21 @@ class TkEpochs(Callback):
         if self.tw.end_training:
             self.model.stop_training = True
             self.tw.set_status('Training Aborted')
+            
+class Convergence(Callback):   
+    '''A custom keras Callback which facilitates early stopping of training when loss convergence is reached'''
+    def __init__(self):
+        super(Callback, self).__init__()
+    
+    #def on_epoch_begin(self, epoch, logs=None): # update the epoch progress bar at the start of each epoch
+        #self.tw.epoch_progress.set_progress(epoch + 1)
+        #self.tw.app.main.update()
+        
+    def on_epoch_end(self, epoch, logs=None):  # abort training if the abort flag has been raised by the training window
+        print(f'Current loss at epoch {epoch} is: {logs["loss"]}')
+        #if self.tw.end_training:
+            #self.model.stop_training = True
+            #self.tw.set_status('Training Aborted')
 
 class TrainingWindow(): 
     '''The window which displays training progress and information, subclassed TopLevel allows it to be separate from the main GUI'''
@@ -49,7 +64,6 @@ class TrainingWindow():
         self.app = main_app # the main app GUI itself (as an object)
         self.training_window = tk.Toplevel(self.app.main)
         self.training_window.title('Training Progress')
-        #self.training_window.geometry('390x210')
         self.training_window.attributes('-topmost', True)
         self.end_training = False # flag for aborting training
         
@@ -203,13 +217,15 @@ class PLATINUMS_App:
         self.tpmode_button.grid(row=2, column=4)
         self.reset_button.grid( row=6, column=4, padx=2)
         
-        self.main.bind('q', lambda event : self.quit()) # universally bind quit and reset actions to keys as well
-        self.main.bind('r', lambda event : self.reset())
+        self.main.bind('q', lambda event : self.quit()) # universally bind quit and reset actions to keys (irrespective of which cell is enabled)
+        #self.main.bind('p', lambda event : self.switch_tpmode()) 
+        self.main.bind('r', lambda event : self.reset())  
         
     # Frame 0
         self.spectrum_size  = 0  # initialize empty variables for various data attributes
         self.species        = []
         self.families       = []
+        self.evaluands      = []
         self.family_mapping = {} 
         
         self.input_frame = ttl.ToggleFrame(self.main, text='Select Parameter Input Method: ', padx=4)
@@ -225,19 +241,19 @@ class PLATINUMS_App:
         self.read_mode       = tk.StringVar()
         
         for i, (mode, underline) in enumerate( (('Select All', 7), ('By Family', 3), ('By Species', 3)) ): # build selection type buttons sequentially w/o class references
-            tk.Radiobutton(self.selection_frame, text=mode, value=mode, var=self.read_mode, underline=underline, command=self.further_sel).grid(row=0, column=i)
+            tk.Radiobutton(self.selection_frame, text=mode, value=mode, var=self.read_mode, underline=underline, command=self.evaluand_selection).grid(row=0, column=i)
         
-        self.confirm_sels = tk.Button(self.selection_frame, text='Confirm Selection', command=self.confirm_selections, bg='deepskyblue2', underline=0, padx=4)
+        self.confirm_sels = tk.Button(self.selection_frame, text='Confirm Selection', command=self.confirm_evaluand_selection, bg='deepskyblue2', underline=0, padx=4)
         self.confirm_sels.grid(row=0, column=3)
         
     #Frame 2
         self.hyperparam_frame    = ttl.ToggleFrame(self.main, text='Set Hyperparameters: ', padx=8, row=3)
         
-        self.epoch_entry         = ttl.LabelledEntry(self.hyperparam_frame, text='Epochs:',    var=tk.IntVar(),    default=2048, width=18, row=0, col=0)
-        self.batchsize_entry     = ttl.LabelledEntry(self.hyperparam_frame, text='Batchsize:', var=tk.IntVar(),    default=32,   width=18, row=1, col=0)
-        self.learnrate_entry     = ttl.LabelledEntry(self.hyperparam_frame, text='Learnrate:', var=tk.DoubleVar(), default=2e-5, width=18, row=0, col=3)
+        self.epoch_entry         = ttl.LabelledEntry(self.hyperparam_frame, text='Epochs:',    var=tk.IntVar(),    default=2048, width=16, row=0, col=0)
+        self.batchsize_entry     = ttl.LabelledEntry(self.hyperparam_frame, text='Batchsize:', var=tk.IntVar(),    default=32,   width=16, row=1, col=0)
+        self.learnrate_entry     = ttl.LabelledEntry(self.hyperparam_frame, text='Learnrate:', var=tk.DoubleVar(), default=2e-5, width=18, row=0, col=2, spacing=(10,0))
         
-        self.confirm_hyperparams = tk.Button(self.hyperparam_frame, text='Confirm Selection', command=self.confirm_hp, padx=5, bg='deepskyblue2')
+        self.confirm_hyperparams = tk.Button(self.hyperparam_frame, text='Confirm Selection', command=self.confirm_hp, padx=5, bg='deepskyblue2', underline=0)
         self.confirm_hyperparams.grid(row=1, column=3, columnspan=2, sticky='e')
         
     #Frame 3
@@ -245,32 +261,31 @@ class PLATINUMS_App:
         
         self.n_slice_entry       = ttl.LabelledEntry(self.slicing_frame, text='Slices:',    var=tk.IntVar(), default=0,  width=18, row=0, col=0)
         self.lower_bound_entry   = ttl.LabelledEntry(self.slicing_frame, text='Bottom:',    var=tk.IntVar(), default=0,  width=18, row=1, col=0)
-        self.slice_dec_entry     = ttl.LabelledEntry(self.slicing_frame, text='Decrement:', var=tk.IntVar(), default=10, width=18, row=0, col=3) 
+        self.slice_dec_entry     = ttl.LabelledEntry(self.slicing_frame, text='Decrement:', var=tk.IntVar(), default=10, width=18, row=0, col=2, spacing=(0, 0)) 
         
-        self.confirm_sliceparams = tk.Button(self.slicing_frame, text='Confirm Selection', command=self.confirm_sparams, padx=5, bg='deepskyblue2')
+        self.confirm_sliceparams = tk.Button(self.slicing_frame, text='Confirm Selection', command=self.confirm_sparams, padx=5, bg='deepskyblue2', underline=0)
         self.confirm_sliceparams.grid(row=1, column=3, columnspan=2, sticky='e')
         
     #Frame 4
-        self.param_frame  = ttl.ToggleFrame(self.main, text='Set Training Parameters: ',  padx=6, row=5) 
-        self.fam_switch   = ttl.Switch(self.param_frame, text='Familiar Training :', underline=0, row=0, col=0)
+        self.param_frame  = ttl.ToggleFrame(self.main, text='Set Training Parameters:', padx=6, row=5)
+        
+        self.tolerance_entry = ttl.LabelledEntry(self.param_frame, text='Tolerance:', var=tk.DoubleVar(), default=0.01, width=16, row=2, col=2, spacing=(6, 0))      
+        self.fam_switch   = ttl.Switch(self.param_frame, text='Familiar Training:',  underline=0, row=0, col=0)
         self.cycle_switch = ttl.Switch(self.param_frame, text='Cycle Familiars: ',   underline=1, row=1, col=0)
-        self.save_switch  = ttl.Switch(self.param_frame, text='Save Weights:',       underline=5, row=2, col=0)
-        self.stop_switch  = ttl.Switch(self.param_frame, text='Early Stopping: ',    underline=0, row=3, col=0)       
+        self.convergence_switch  = ttl.Switch(self.param_frame, text='Convergence:', underline=3, row=2, col=0, dependents=(self.tolerance_entry,))
+        self.save_switch  = ttl.Switch(self.param_frame, text='Save Weights:',       underline=5, row=3, col=0) 
         
-        self.blank_var1   = tk.BooleanVar()
-        self.blank_var2   = tk.BooleanVar()
-        self.save_preset  = tk.BooleanVar()     
+        self.blank_var   = tk.BooleanVar()
+        self.save_preset = tk.BooleanVar()     
+ 
+        self.blank_option_button = tk.Checkbutton(self.param_frame, text=' '*21, var=self.blank_var, padx=5) # leaving room for future expnadability
+        self.save_preset_button   = tk.Checkbutton(self.param_frame, text='Save Preset?', var=self.save_preset, underline=0, padx=5)  
         
-        self.blank_option1_button = tk.Checkbutton(self.param_frame, text='      ', var=self.blank_var1, padx=5) # leaving room for future expnadability
-        self.blank_option2_button = tk.Checkbutton(self.param_frame, text='      ', var=self.blank_var2, padx=5)
-        self.save_preset_button   = tk.Checkbutton(self.param_frame, text='Save Preset to Main?', var=self.save_preset, underline=0, padx=5)  
-        
-        self.blank_option1_button.grid(row=0, column=2, sticky='e', padx=(0, 90))
-        self.blank_option2_button.grid(row=1, column=2, sticky='e', padx=(0, 90))
-        self.save_preset_button.grid(  row=2, column=2, sticky='e', padx=(21, 0))
+        self.blank_option_button.grid(row=0, column=2, columnspan=2, sticky='e')
+        self.save_preset_button.grid( row=1, column=2, columnspan=2, sticky='e')
         
         self.confirm_train_params = tk.Button(self.param_frame, text='Confirm Selection', command=self.confirm_tparams, bg='deepskyblue2', underline=0, padx=6)
-        self.confirm_train_params.grid(row=3, column=2, sticky='e')
+        self.confirm_train_params.grid(row=3, column=2, columnspan=2, sticky='e')
 
     # Frame 5 - contains only the button used to trigger a main action  
         self.activation_frame = ttl.ToggleFrame(self.main, text='', padx=0, pady=0, row=6)   
@@ -284,22 +299,22 @@ class PLATINUMS_App:
         self.switch_tpmode()
          
     # Packaging together some widgets and attributes, for ease of reference (also useful for self.reset() and self.isolate() methods)
-        self.arrays      = (self.parameters, self.species, self.families, self.family_mapping) 
-        self.switch_vars = (self.read_mode, self.input_mode, self.blank_var1, self.blank_var2, self.save_preset)
+        self.arrays      = (self.parameters, self.species, self.families, self.evaluands, self.family_mapping) 
+        self.switch_vars = (self.read_mode, self.input_mode, self.blank_var, self.save_preset)
         self.frames      = (self.input_frame, self.selection_frame, self.hyperparam_frame, self.slicing_frame, self.param_frame, self.activation_frame)
 
-        self.switch_mapping = {self.fam_switch : 'fam_training',
-                               self.save_switch : 'save_weights',
-                               self.stop_switch : 'early_stopping',
-                               self.cycle_switch : 'cycle_fams'}
+        self.tparam_mapping = {self.convergence_switch : 'convergence',
+                               self.tolerance_entry : 'tolerance', # strictly an entry, not a switch, but makes code cleaner of placed here
+                               self.fam_switch : 'fam_training',
+                               self.cycle_switch : 'cycle_fams',
+                               self.save_switch : 'save_weights'}
         self.hp_entry_mapping = {self.epoch_entry : 'num_epochs',
                                  self.batchsize_entry : 'batchsize',
-                                 self.learnrate_entry : 'learnrate'}
+                                 self.learnrate_entry : 'learnrate'} 
         self.slice_entry_mapping = {self.lower_bound_entry : 'trimming_min', 
                                     self.slice_dec_entry : 'slice_decrement',
                                     self.n_slice_entry : 'num_slices'}
-        self.entry_mapping = {**self.hp_entry_mapping, **self.slice_entry_mapping} # merged internal dict of all entries present  
-        self.field_mapping = {**self.entry_mapping, **self.switch_mapping} # merged internal dict of all field which can be filled out within the app
+        self.field_mapping = {**self.tparam_mapping, **self.hp_entry_mapping, **self.slice_entry_mapping} # merged internal dict of all field which can be filled out within the app
         
         self.main.bind('<Key>', self.key_in_input) # activate internal conditional hotkey binding
         self.reset() # set menu to default configuration
@@ -342,15 +357,17 @@ class PLATINUMS_App:
                            's' : 'By Species'}
             if event.char in opt_mapping:
                 self.read_mode.set(opt_mapping[event.char]) # choose one of the read modes if the proper hotkey is selected
-                self.further_sel() # open further selection menu if not just selecting all
+                self.evaluand_selection() # open further selection menu if not just selecting all
             elif event.char == 'c':
-                self.confirm_selections()
-        #elif self.hyperparam_frame.state == 'normal' and event.char == 'c': # disabled for now, as the character "c" gets typed into entry
-            #self.confirm_hp()
+                self.confirm_evaluand_selection()
+        elif self.hyperparam_frame.state == 'normal' and event.char == 'c': 
+            self.confirm_hp()
+        elif self.slicing_frame.state == 'normal' and event.char == 'c': 
+            self.confirm_sparams()
         elif self.param_frame.state == 'normal':
             switch_mapping = {'f' : self.fam_switch,
                               'w' : self.save_switch,
-                              'e' : self.stop_switch,
+                              'v' : self.convergence_switch,
                               'y' : self.cycle_switch}
             if event.char in switch_mapping:
                 switch_mapping[event.char].toggle() # make parameter switches toggleable with keyboard
@@ -433,43 +450,48 @@ class PLATINUMS_App:
             if self.input_mode.get() == 'Manual Input':                
                 self.isolate(self.selection_frame)
             elif self.input_mode.get() == 'Preset from File': # could simply leave as "else", but is more explicit as is
-                self.confirm_selections() # handles the case when family or all are passed explicitly as selections  
                 
-                self.read_mode.set(self.parameters['read_mode'])
                 for field, param in self.field_mapping.items():
                     try:
                         field.set_value(self.parameters[param]) # configure all the switch values in the GUI
                     except KeyError as error:
                         messagebox.showerror('Preset Error', f'The parameter "{error}" is either missing or misnamed;\n Please check preset file for errors') 
                         break
-
+                  
+                self.read_mode.set(self.parameters['read_mode'])
+                self.confirm_evaluand_selection() # assigns evaluands based on the given read mode and selections buffer
+                    
                 self.check_trimming_bounds() # ensure that bounds actually make sense  
                 self.isolate(self.activation_frame)
             self.main.config(cursor='') # return cursor to normal
         
     # Frame 1 (Evaluand Selection) Methods
-    def further_sel(self): 
+    def evaluand_selection(self): 
         '''logic for selection of evaluands to include in training, based on the chosen selection mode'''
-        self.parameters['selections'] = [] # empties selections when selection menu is re-clicked (ensures no overwriting or mixing)
-        self.parameters['read_mode'] = self.read_mode.get() # record the read mode to parameters with each selection
+        self.parameters['selections'] = [] # empties internal evaluand buffer when selection menu is re-clicked (ensures no overwriting or mixing, also serves as first-time list init)
+        self.parameters['read_mode']  = self.read_mode.get() # record the read mode to parameters with each selection
         
         if self.read_mode.get() == 'By Species':
             ttl.SelectionWindow(self.main, self.selection_frame, self.species, self.parameters['selections'], window_title='Select Species to evaluate', ncols=8)
         elif self.read_mode.get() == 'By Family':
             ttl.SelectionWindow(self.main, self.selection_frame, self.families, self.parameters['selections'], window_title='Select Families to evaluate over', ncols=3)
-        # case for "Select All" is covered in confirm_selections() in order to be compatible with loading from preset
+        elif self.read_mode.get() == 'Select All':
+            self.parameters['selections'].append('All Species') # add a flag to make clear that all species are being selected
 
-    def confirm_selections(self):
+    def confirm_evaluand_selection(self):
         '''Parsing and processing of the selections before proceeding'''
-        if self.read_mode.get() == 'Select All':
-            self.parameters['selections'] = self.species   
+        if self.read_mode.get() == 'By Species':
+            self.evaluands = self.parameters['selections']      
         elif self.read_mode.get() == 'By Family':  # pick out species by family if selection by family is made
-            self.parameters['selections'] = [species for species in self.species if iumsutils.get_family(species) in self.parameters['selections']]    
+            self.evaluands = [species for species in self.species if iumsutils.get_family(species) in self.parameters['selections']]  
+        elif self.read_mode.get() == 'Select All':
+            self.evaluands = self.species 
         
-        if not self.parameters.get('selections'): # if the selections parameter is still empty (or doesn't exist), instruct the user to make a choice
+        if not self.evaluands: # if the evaluands is still empty (or doesn't exist), instruct the user to make a choice
             messagebox.showerror('No evaluands selected', 'Please ensure one or more species have been selected for evaluation')
         else: 
             self.isolate(self.hyperparam_frame)
+            self.tolerance_entry.configure(state='disabled') # ensure tolerance dependent remains disabled
    
     # Frame 2 (hyperparameter) Methods
     def confirm_hp(self):
@@ -482,10 +504,10 @@ class PLATINUMS_App:
     def confirm_sparams(self):
         '''Confirm the selected slicing and proceed'''
         for slice_entry, param in self.slice_entry_mapping.items():
-            self.parameters[param] = slice_entry.get_value()  
-            
+            self.parameters[param] = slice_entry.get_value()            
         self.check_trimming_bounds() # ensure bounds make sense, notify the user if they don't
-        self.isolate(self.param_frame)     
+        self.isolate(self.param_frame) 
+        self.convergence_switch.disable() # ensure convergence is disabled by default
      
     # Frame 4 (training parameter) Methods
     def check_trimming_bounds(self):
@@ -501,12 +523,11 @@ class PLATINUMS_App:
     
     def confirm_tparams(self):
         '''Confirm training parameter selections, perform pre-training error checks if necessary'''
-        for switch, param in self.switch_mapping.items():
-            self.parameters[param] = switch.value # configure parameters based on the switch values
+        for field, param in self.tparam_mapping.items():
+            self.parameters[param] = field.get_value() # configure parameters based on the switch values
 
         if self.save_preset.get(): # if the user has elected to save the current preset
-            preset_path = Path(filedialog.asksaveasfilename(title='Save Preset to file', initialdir='./Training Presets',
-                                                            defaultextension='.json', filetypes=[('JSONs', '*.json')] ))
+            preset_path = Path( filedialog.asksaveasfilename(title='Save Preset to file', initialdir='./Training Presets', defaultextension='.json', filetypes=[('JSONs', '*.json')]) )
             try: 
                 with open(preset_path, 'w') as preset_file:
                     json.dump(self.parameters, preset_file)
@@ -559,7 +580,6 @@ class PLATINUMS_App:
         
         # SHADOWING PARAMETER NAMES INTERNALLY TO EASE READABILITY AND REDUCE NUMBER OF LOOKUPS
         data_files      = self.parameters['data_files'] 
-        selections      = self.parameters['selections'] 
         num_epochs      = self.parameters['num_epochs'] 
         batchsize       = self.parameters['batchsize']
         learnrate       = self.parameters['learnrate'] 
@@ -571,7 +591,7 @@ class PLATINUMS_App:
         cycle_fams      = self.parameters['cycle_fams']
         fam_training    = self.parameters['fam_training']
         save_weights    = self.parameters['save_weights']
-        early_stopping  = self.parameters['early_stopping']      
+        convergence     = self.parameters['convergence']      
 
         # FILE MANAGEMENT, GUARANTEES THAT NO ACCIDENTAL OVERWRITES OCCUR AND THAT AN APPROPRIATE EMPTY FOLDER EXISTS TO WRITE RESULTS TO
         parent_folder = self.prepare_result_folder(default_name=f'{num_epochs} epoch, {cycle_fams and "cycled" or (fam_training and "familiar" or "unfamiliar")}')
@@ -585,14 +605,15 @@ class PLATINUMS_App:
         # PREPARING GUI FOR TRAINING
         self.activation_frame.disable()     # disable training button while training (an idiot-proofing measure)                 
         train_window = TrainingWindow(self) # pass the GUI app to the training window object to allow for menu manipulation        
-        train_window.round_progress.set_max(len(selections)*n_slices*(1 + cycle_fams)) # compute and display the number of training rounds to occur
+        train_window.round_progress.set_max(len(self.evaluands)*n_slices*(1 + cycle_fams)) # compute and display the number of training rounds to occur
         train_window.file_num_progress.set_max(len(data_files))
         
         # INJECTING KERAS CALLBACKS TO REGULATE AND INDEX TRAINING
         keras_callbacks = [TkEpochs(train_window)] # in every case, add the tkinter-keras interface callback to the callbacks list
-        if early_stopping:
-            early_stopping_callback = EarlyStopping(monitor='loss', mode='min', verbose=keras_verbosity, patience=16, restore_best_weights=True) # fine-tune patience, eventually
-            keras_callbacks.append(early_stopping_callback) # add early stopping callback if called for
+        if convergence:
+            #early_stopping_callback = EarlyStopping(monitor='loss', mode='min', verbose=keras_verbosity, patience=16, restore_best_weights=True) # fine-tune patience, eventually
+            #keras_callbacks.append(early_stopping_callback) # add early stopping callback if called for
+            keras_callbacks.append(Convergence())
         
         # BEGINNING OF ACTUAL TRAINING CYCLE, ITERATE THROUGH EVERY DATA FILE PASSED
         point_ranges = set() # stores the slicing point ranges, used later to spliced together familiar and unfamiliar reulst files - is a set to avoid duplication
@@ -640,13 +661,13 @@ class PLATINUMS_App:
                     predictions, round_summary = [
                         {family : 
                             {species : {}
-                                for species in sorted((species for species in selections if iumsutils.get_family(species) == family), key=iumsutils.get_carbon_ordering)
+                                for species in sorted((species for species in self.evaluands if iumsutils.get_family(species) == family), key=iumsutils.get_carbon_ordering)
                             }
-                            for family in sorted(set(iumsutils.get_family(species) for species in selections))
+                            for family in sorted(set(iumsutils.get_family(species) for species in self.evaluands))
                         } 
                     for i in range(2)]  # outer data structure is the same for both predictions and the round summary
                     
-                    for evaluand_idx, evaluand in enumerate(selections):                  
+                    for evaluand_idx, evaluand in enumerate(self.evaluands):                  
                         train_window.set_status('Training...')
                         train_window.round_progress.increment() 
                         train_window.epoch_progress.set_max(num_epochs) # reset maximum number of epochs on progress bar to specified amount (done each round to handle early stopping)
@@ -657,28 +678,28 @@ class PLATINUMS_App:
                         train_window.set_evaluand(f'{evaluand} ({len(eval_titles)} instances found)')
 
                         # TRAIN/TEST SET CREATION, MODEL CREATION, AND MODEL TRAINING
-                        if not fam_training or evaluand_idx == 0: # for familiars, model is only trained during first evaluand at each slice (since training set is identical throughout)
+                        if not fam_training or evaluand_idx == 0: # train over all evaluands for unfamiliars, but only first evaluand for familiars (training set is same for familiars)
                             features = [instance.spectrum[lower_bound:upper_bound] for instance in chem_data if instance.species != evaluand or fam_training]
                             labels   = [instance.vector for instance in chem_data if instance.species != evaluand or fam_training]
                             x_train, x_test, y_train, y_test = map(np.array, train_test_split(features, labels, test_size=test_set_proportion)) # keras model only accepts numpy arrays
 
                             with tf.device('CPU:0'):     # eschews the requirement for a brand-new NVIDIA graphics card (which we don't have anyways)                      
                                 model = Sequential()     # model block is created, layers are added to this block
-                                model.add(Dense(256, input_dim=(upper_bound - lower_bound), activation='relu'))  # 256 neuron input layer, size depends on trimming
-                                model.add(Dropout(0.5))                                          # dropout layer, to reduce overfit
-                                model.add(Dense(256, activation='relu'))                         # 256 neuron hidden layer
+                                model.add(Dense(150, input_dim=(upper_bound - lower_bound), activation='tanh'))  # 512 neuron input layer, size depends on trimming
+                                #model.add(Dropout(0.5))                                          # dropout layer, to reduce overfit
+                                #model.add(Dense(256, activation='relu'))                         # 512 neuron hidden layer
                                 model.add(Dense(len(self.family_mapping), activation='softmax')) # softmax gives probability distribution of identity over all families
-                                model.compile(loss='categorical_crossentropy', optimizer=Adam(lr=learnrate), metrics=['accuracy']) 
-                                #model.compile(loss='categorical_crossentropy', optimizer=RMSprop(lr=learnrate), metrics=['accuracy']) 
+                                #model.compile(loss='categorical_crossentropy', optimizer=Adam(lr=learnrate), metrics=['accuracy']) 
+                                model.compile(loss='categorical_crossentropy', optimizer=RMSprop(lr=learnrate), metrics=['accuracy']) 
 
                             hist = model.fit(x_train, y_train, validation_data=(x_test, y_test), callbacks=keras_callbacks, # actual model training occurs here
                                              verbose=keras_verbosity, epochs=num_epochs, batch_size=batchsize)
                             final_evals = model.evaluate(x_test, y_test, verbose=keras_verbosity)  # keras' self evaluation of loss and accuracy metric
 
-                            if early_stopping and early_stopping_callback.stopped_epoch: # if early stopping has indeed been triggered:
-                                train_window.epoch_progress.set_max(early_stopping_callback.stopped_epoch + 1) # set progress max to stopped epoch, to indicate that training is done   
-                                with log_file_path.open(mode='a') as log_file: 
-                                    log_file.write(f'{fam_training and fam_str or evaluand} training round stopped early at epoch {early_stopping_callback.stopped_epoch + 1}\n')
+                            #if early_stopping and early_stopping_callback.stopped_epoch: # if early stopping has indeed been triggered:
+                                #train_window.epoch_progress.set_max(early_stopping_callback.stopped_epoch + 1) # set progress max to stopped epoch, to indicate that training is done   
+                                #with log_file_path.open(mode='a') as log_file: 
+                                    #log_file.write(f'{fam_training and fam_str or evaluand} training round stopped early at epoch {early_stopping_callback.stopped_epoch + 1}\n')
 
                             if save_weights and not train_window.end_training: # if saving is enabled, save the model to the current result directory
                                 train_window.set_status('Saving Model...')
@@ -686,11 +707,12 @@ class PLATINUMS_App:
                                 model.save(str(weights_folder)) # path can only be str, for some reason
 
                                 local_preset = {param : value for param, value in self.parameters.items()} # make a deep copy of the parameters that can be modified locally
-                                local_preset['data_files']   = [data_file]  # only retrain using the current file
+                                local_preset['data_files'  ] = [data_file]  # only retrain using the current file
                                 local_preset['fam_training'] = fam_training # to account for cycling
-                                local_preset['cycle_fams']   = False        # ensure no cycling is performed for reproduction
-                                local_preset['selections']   = [evaluand]   # only requires a single evaluand (and in the case of familiars, the particular one is not at all relevant)
-                                local_preset['num_slices']   = 0            # no slices, only full data 
+                                local_preset['cycle_fams'  ] = False        # ensure no cycling is performed for reproduction
+                                local_preset['read_mode'   ] = 'By Species' # ensure only species-wise reading is being performed
+                                local_preset['selections'  ] = [evaluand]   # only requires a single evaluand (and in the case of familiars, the particular one is not at all relevant)
+                                local_preset['num_slices'  ] = 0            # no slices, only full data 
                                 with open(weights_folder/f'Reproducability Preset ({point_range}).json', 'w') as weights_preset: 
                                     json.dump(local_preset, weights_preset)  # add a preset to each model file that allows for reproduction of ONLY that single model file                      
 
@@ -702,10 +724,9 @@ class PLATINUMS_App:
 
                         # CREATION OF THE SPECIES SUMMARY OBJECT FOR THE CURRENT EVALUAND, PLOTTING OF EVALUATION RESULTS FOR THE CURRENT EVALUAND 
                         train_window.set_status('Plotting Results to Folder...')
-
                         for inst_name, pred in zip(eval_titles, model.predict(np.array(eval_spectra))): # file predictions into dict
                             predictions[curr_family][evaluand][inst_name] = [float(i) for i in pred] # convert to list of floats for JSON serialization 
-                        
+                            
                         # obtain and file current evaluand score, plotting summary graphics in the process; overwrites empty dictionary
                         round_summary[curr_family][evaluand] = plotutils.plot_and_get_score(evaluand, eval_spectra, predictions, hist.history['loss'],
                                                                                              hist.history['accuracy'],final_evals, savedir=curr_slice_folder)                
