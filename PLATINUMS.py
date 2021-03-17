@@ -16,6 +16,9 @@ from tkinter import filedialog
 
 # PIP-installed Imports                
 import numpy as np
+import matplotlib.pyplot as plt
+import matplotlib.animation as animation
+from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
 from sklearn.model_selection import train_test_split
 
 import tensorflow as tf     # Neural Net Libraries
@@ -29,34 +32,39 @@ tf.get_logger().setLevel('ERROR') # suppress deprecation warnings which seem to 
 
 # SECTION 1 : custom classes needed to operate some features of the main GUI  ---------------------------------------------------                   
 class TkEpochs(Callback):   
-    '''A custom keras Callback which interfaces between the training window and the Keras model training session'''
+    '''A custom keras Callback for interfacing between the current model training epoch and the training window'''
     def __init__(self, training_window):
         super(Callback, self).__init__()
         self.tw = training_window
     
     def on_epoch_begin(self, epoch, logs=None): # update the epoch progress bar at the start of each epoch
         self.tw.epoch_progress.set_progress(epoch + 1)
-        self.tw.app.main.update()
+        self.tw.app.main.update() # allows for mobility of the main window while training
         
     def on_epoch_end(self, epoch, logs=None):  # abort training if the abort flag has been raised by the training window
+        '''self.tw.x.append(epoch)
+        self.tw.y.append(logs.get('loss'))
+        self.tw.line.set_data(self.tw.x, self.tw.y)
+        #self.tw.ax1.set_xlim(0, epoch+1)
+        self.tw.canvas.draw()'''
+        
         if self.tw.end_training:
             self.model.stop_training = True
-            self.tw.set_status('Training Aborted')
             
 class Convergence(Callback):   
     '''A custom keras Callback which facilitates early stopping of training when loss convergence is reached'''
-    def __init__(self):
+    def __init__(self, threshold):
         super(Callback, self).__init__()
-    
-    #def on_epoch_begin(self, epoch, logs=None): # update the epoch progress bar at the start of each epoch
-        #self.tw.epoch_progress.set_progress(epoch + 1)
-        #self.tw.app.main.update()
+        self.threshold = threshold
+        self.stopped_epoch = None
         
     def on_epoch_end(self, epoch, logs=None):  # abort training if the abort flag has been raised by the training window
-        print(f'Current loss at epoch {epoch} is: {logs["loss"]}')
-        #if self.tw.end_training:
-            #self.model.stop_training = True
-            #self.tw.set_status('Training Aborted')
+        if logs.get('loss') < self.threshold:
+            self.model.stop_training = True # immediately terminate training
+            self.stopped_epoch = epoch + 1  # flag current epoch (1-indexed) as the point of termination
+            
+    def reset_flag(self):
+        self.stopped_epoch = None
 
 class TrainingWindow(): 
     '''The window which displays training progress and information, subclassed TopLevel allows it to be separate from the main GUI'''
@@ -66,6 +74,15 @@ class TrainingWindow():
         self.training_window.title('Training Progress')
         self.training_window.attributes('-topmost', True)
         self.end_training = False # flag for aborting training
+        
+        '''fig = plt.figure(figsize=(5,5), dpi=45)
+        self.canvas = FigureCanvasTkAgg(fig, self.training_window)
+        self.canvas.get_tk_widget().grid(row=0, column=1, rowspan=3)
+        self.ax1 = fig.add_subplot(1, 1, 1)
+        self.ax1.set_ylim(0, 2)
+        self.ax1.set_xlim(0, 500)
+        self.x, self.y = [0], [0]
+        self.line, = self.ax1.plot(self.x, self.y, 'r')'''
         
         # Status Printouts
         self.status_frame = tk.Frame(self.training_window, bd=2, padx=9, relief='groove')
@@ -129,7 +146,7 @@ class TrainingWindow():
         
         self.training_window.bind('<Key>', self.key_bind)
         self.reset() # ensure menu begins at default status when instantiated
-     
+    
     def retrain(self):
         self.destroy()      # kill self (to avoid persistence issues)
         self.app.training() # run the main window's training function
@@ -139,8 +156,10 @@ class TrainingWindow():
         self.app.reset() # reset the main window
     
     def abort(self):
-        self.end_training = True
-        self.reset() # has to be in this order in order for buttons to stay on after abortion
+        self.end_training = True      
+        self.set_status('Training Aborted')
+        
+        self.abort_button.configure(state='disabled')
         self.button_frame.enable()
          
     def key_bind(self, event):
@@ -163,6 +182,7 @@ class TrainingWindow():
         for readout in self.readouts:
             self.set_readout(readout, '---')
         
+        self.end_training = False
         self.set_status('Standby')
         self.button_frame.disable()
     
@@ -591,10 +611,12 @@ class PLATINUMS_App:
         cycle_fams      = self.parameters['cycle_fams']
         fam_training    = self.parameters['fam_training']
         save_weights    = self.parameters['save_weights']
-        convergence     = self.parameters['convergence']      
+        convergence     = self.parameters['convergence']   
+        tolerance       = self.parameters['tolerance']
 
         # FILE MANAGEMENT, GUARANTEES THAT NO ACCIDENTAL OVERWRITES OCCUR AND THAT AN APPROPRIATE EMPTY FOLDER EXISTS TO WRITE RESULTS TO
-        parent_folder = self.prepare_result_folder(default_name=f'{num_epochs} epoch, {cycle_fams and "cycled" or (fam_training and "familiar" or "unfamiliar")}')
+        generic_descriptor = f'{convergence and f"{tolerance} Error" or f"{num_epochs} epoch"}, {cycle_fams and "cycled" or (fam_training and "familiar" or "unfamiliar")}'
+        parent_folder = self.prepare_result_folder(default_name=generic_descriptor)
         if not parent_folder: # if file determination returns empty due to user cancellation/omission, exit training routine
             return
                 
@@ -607,13 +629,12 @@ class PLATINUMS_App:
         train_window = TrainingWindow(self) # pass the GUI app to the training window object to allow for menu manipulation        
         train_window.round_progress.set_max(len(self.evaluands)*n_slices*(1 + cycle_fams)) # compute and display the number of training rounds to occur
         train_window.file_num_progress.set_max(len(data_files))
-        
-        # INJECTING KERAS CALLBACKS TO REGULATE AND INDEX TRAINING
-        keras_callbacks = [TkEpochs(train_window)] # in every case, add the tkinter-keras interface callback to the callbacks list
+
+        keras_callbacks = [TkEpochs(train_window)] # in every case, add the tkinter-keras interface callback to the callbacks list   
         if convergence:
-            #early_stopping_callback = EarlyStopping(monitor='loss', mode='min', verbose=keras_verbosity, patience=16, restore_best_weights=True) # fine-tune patience, eventually
-            #keras_callbacks.append(early_stopping_callback) # add early stopping callback if called for
-            keras_callbacks.append(Convergence())
+            num_epochs = 100000 # set epoch size to very large number to account for unconstrained traning
+            convergence_callback = Convergence(tolerance) # named so this parameter can be referenced within code after stopping
+            keras_callbacks.append(convergence_callback)
         
         # BEGINNING OF ACTUAL TRAINING CYCLE, ITERATE THROUGH EVERY DATA FILE PASSED
         point_ranges = set() # stores the slicing point ranges, used later to spliced together familiar and unfamiliar reulst files - is a set to avoid duplication
@@ -685,42 +706,41 @@ class PLATINUMS_App:
 
                             with tf.device('CPU:0'):     # eschews the requirement for a brand-new NVIDIA graphics card (which we don't have anyways)                      
                                 model = Sequential()     # model block is created, layers are added to this block
+                                model.add(Dense(256, input_dim=(upper_bound - lower_bound), activation='relu'))  # 256 neuron input layer, size depends on trimming      
+                                model.add(Dropout(0.5))                                          # dropout layer, to reduce overfit
+                                model.add(Dense(256, activation='relu'))                         # 256 neuron hidden layer
+                                model.compile(loss='categorical_crossentropy', optimizer=Adam(lr=learnrate), metrics=['accuracy']) '''                              
                                 model.add(Dense(150, input_dim=(upper_bound - lower_bound), activation='tanh'))  # 512 neuron input layer, size depends on trimming
-                                #model.add(Dropout(0.5))                                          # dropout layer, to reduce overfit
-                                #model.add(Dense(256, activation='relu'))                         # 512 neuron hidden layer
                                 model.add(Dense(len(self.family_mapping), activation='softmax')) # softmax gives probability distribution of identity over all families
-                                #model.compile(loss='categorical_crossentropy', optimizer=Adam(lr=learnrate), metrics=['accuracy']) 
-                                model.compile(loss='categorical_crossentropy', optimizer=RMSprop(lr=learnrate), metrics=['accuracy']) 
+                                model.compile(loss='categorical_crossentropy', optimizer=RMSprop(lr=learnrate), metrics=['accuracy']) '''
+                            hist = model.fit(x_train, y_train, validation_data=(x_test, y_test), callbacks=keras_callbacks, verbose=keras_verbosity, epochs=num_epochs, batch_size=batchsize)
+                    
+                        if model.stop_training: # if training has been interrupted for whatever reason                             
+                            if train_window.end_training: # check if training has been aborted by user as well
+                                messagebox.showerror('Training has Stopped!', 'Training aborted by user;\nProceed from Progress Window', parent=train_window.training_window)
+                                train_window.button_frame.enable()
+                                return # without a return, aborting training only pauses one iteration of loop
+                            
+                            if convergence: # check if training stopped due to convergence being reached. NOTE! - important that this be second for abortion to work during convergence!
+                                train_window.epoch_progress.set_max(convergence_callback.stopped_epoch) # set progress max to stopped epoch, to indicate that training is done   
+                                with log_file_path.open(mode='a') as log_file: 
+                                    log_file.write(f'{fam_training and fam_str or evaluand} training round stopped early at epoch {convergence_callback.stopped_epoch}\n')
+                                convergence_callback.reset_flag() # reset stopped epoch to None for next training round                                           
 
-                            hist = model.fit(x_train, y_train, validation_data=(x_test, y_test), callbacks=keras_callbacks, # actual model training occurs here
-                                             verbose=keras_verbosity, epochs=num_epochs, batch_size=batchsize)
-                            final_evals = model.evaluate(x_test, y_test, verbose=keras_verbosity)  # keras' self evaluation of loss and accuracy metric
+                        elif save_weights: # otherwise, save the model to the current result directory if saving is enabled
+                            train_window.set_status('Saving Model...')
+                            weights_folder = curr_slice_folder/f'{fam_training and fam_str or evaluand} Model Files'
+                            model.save(str(weights_folder)) # path can only be str, for some reason
 
-                            #if early_stopping and early_stopping_callback.stopped_epoch: # if early stopping has indeed been triggered:
-                                #train_window.epoch_progress.set_max(early_stopping_callback.stopped_epoch + 1) # set progress max to stopped epoch, to indicate that training is done   
-                                #with log_file_path.open(mode='a') as log_file: 
-                                    #log_file.write(f'{fam_training and fam_str or evaluand} training round stopped early at epoch {early_stopping_callback.stopped_epoch + 1}\n')
-
-                            if save_weights and not train_window.end_training: # if saving is enabled, save the model to the current result directory
-                                train_window.set_status('Saving Model...')
-                                weights_folder = curr_slice_folder/f'{fam_training and fam_str or evaluand} Model Files'
-                                model.save(str(weights_folder)) # path can only be str, for some reason
-
-                                local_preset = {param : value for param, value in self.parameters.items()} # make a deep copy of the parameters that can be modified locally
-                                local_preset['data_files'  ] = [data_file]  # only retrain using the current file
-                                local_preset['fam_training'] = fam_training # to account for cycling
-                                local_preset['cycle_fams'  ] = False        # ensure no cycling is performed for reproduction
-                                local_preset['read_mode'   ] = 'By Species' # ensure only species-wise reading is being performed
-                                local_preset['selections'  ] = [evaluand]   # only requires a single evaluand (and in the case of familiars, the particular one is not at all relevant)
-                                local_preset['num_slices'  ] = 0            # no slices, only full data 
-                                with open(weights_folder/f'Reproducability Preset ({point_range}).json', 'w') as weights_preset: 
-                                    json.dump(local_preset, weights_preset)  # add a preset to each model file that allows for reproduction of ONLY that single model file                      
-
-                        # ABORTION CHECK PRIOR TO WRITING FILES, WILL CEASE IF TRAINING IS ABORTED
-                        if train_window.end_training:  
-                            messagebox.showerror('Training has Stopped!', 'Training aborted by user;\nProceed from Progress Window', parent=train_window.training_window)
-                            train_window.button_frame.enable()
-                            return # without a return, aborting training only pauses one iteration of loop
+                            local_preset = {param : value for param, value in self.parameters.items()} # make a deep copy of the parameters that can be modified locally
+                            local_preset['data_files'  ] = [data_file]  # only retrain using the current file
+                            local_preset['fam_training'] = fam_training # to account for current familiar or unfamiliar status
+                            local_preset['cycle_fams'  ] = False        # ensure no cycling is performed for reproduction
+                            local_preset['read_mode'   ] = 'By Species' # ensure only species-wise reading is being performed
+                            local_preset['selections'  ] = [evaluand]   # only requires a single evaluand (and in the case of familiars, the particular one is not at all relevant)
+                            local_preset['num_slices'  ] = 0            # no slices, only full data 
+                            with open(weights_folder/f'Reproducability Preset ({point_range}).json', 'w') as weights_preset: 
+                                json.dump(local_preset, weights_preset)  # add a preset to each model file that allows for reproduction of ONLY that single model file                      
 
                         # CREATION OF THE SPECIES SUMMARY OBJECT FOR THE CURRENT EVALUAND, PLOTTING OF EVALUATION RESULTS FOR THE CURRENT EVALUAND 
                         train_window.set_status('Plotting Results to Folder...')
@@ -728,8 +748,9 @@ class PLATINUMS_App:
                             predictions[curr_family][evaluand][inst_name] = [float(i) for i in pred] # convert to list of floats for JSON serialization 
                             
                         # obtain and file current evaluand score, plotting summary graphics in the process; overwrites empty dictionary
+                        final_evals = model.evaluate(x_test, y_test, verbose=keras_verbosity)  # keras' self evaluation of loss and accuracy metric
                         round_summary[curr_family][evaluand] = plotutils.plot_and_get_score(evaluand, eval_spectra, predictions, hist.history['loss'],
-                                                                                             hist.history['accuracy'],final_evals, savedir=curr_slice_folder)                
+                                                                                             hist.history['accuracy'], final_evals, savedir=curr_slice_folder)                
                     # CALCULATION AND PROCESSING OF RESULTS TO PRODUCE SCORES AND SUMMARIES 
                     train_window.set_status(f'Unpacking Scores...')
                     
