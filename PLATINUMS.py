@@ -42,12 +42,7 @@ class TkEpochs(Callback):
         self.tw.app.main.update() # allows for mobility of the main window while training
         
     def on_epoch_end(self, epoch, logs=None):  # abort training if the abort flag has been raised by the training window
-        '''self.tw.x.append(epoch)
-        self.tw.y.append(logs.get('loss'))
-        self.tw.line.set_data(self.tw.x, self.tw.y)
-        #self.tw.ax1.set_xlim(0, epoch+1)
-        self.tw.canvas.draw()'''
-        
+        self.tw.update_loss_plot(epoch, logs.get('loss'))
         if self.tw.end_training:
             self.model.stop_training = True
             
@@ -75,14 +70,15 @@ class TrainingWindow():
         self.training_window.attributes('-topmost', True)
         self.end_training = False # flag for aborting training
         
-        '''fig = plt.figure(figsize=(5,5), dpi=45)
-        self.canvas = FigureCanvasTkAgg(fig, self.training_window)
+        # Live Training Loss Plot
+        self.loss_figure = plt.figure(figsize=(5,5), dpi=45)       
+        self.canvas = FigureCanvasTkAgg(self.loss_figure, self.training_window)
         self.canvas.get_tk_widget().grid(row=0, column=1, rowspan=3)
-        self.ax1 = fig.add_subplot(1, 1, 1)
-        self.ax1.set_ylim(0, 2)
-        self.ax1.set_xlim(0, 500)
-        self.x, self.y = [0], [0]
-        self.line, = self.ax1.plot(self.x, self.y, 'r')'''
+        
+        self.loss_plot = self.loss_figure.add_subplot(1, 1, 1)
+        self.loss_plot.set_title('Progress Monitor')
+        self.loss_plot.set_xlabel('Training Epoch')
+        self.loss_plot.set_ylabel('Training Loss')
         
         # Status Printouts
         self.status_frame = tk.Frame(self.training_window, bd=2, padx=9, relief='groove')
@@ -147,6 +143,19 @@ class TrainingWindow():
         self.training_window.bind('<Key>', self.key_bind)
         self.reset() # ensure menu begins at default status when instantiated
     
+    def key_bind(self, event):
+        '''command to bind hotkeys, contingent on menu enabled status'''
+        if self.button_frame.state == 'normal':
+            if event.char == 't':
+                self.retrain()
+            elif event.char == 'r':
+                self.reset_main()
+            elif event.char == 'q':
+                self.app.quit()
+        elif self.abort_button.cget('state') == 'normal' and event.char == 'b':
+            self.abort()
+    
+    # Button methods
     def retrain(self):
         self.destroy()      # kill self (to avoid persistence issues)
         self.app.training() # run the main window's training function
@@ -161,18 +170,6 @@ class TrainingWindow():
         
         self.abort_button.configure(state='disabled')
         self.button_frame.enable()
-         
-    def key_bind(self, event):
-        '''command to bind hotkeys, contingent on menu enabled status'''
-        if self.button_frame.state == 'normal':
-            if event.char == 't':
-                self.retrain()
-            elif event.char == 'r':
-                self.reset_main()
-            elif event.char == 'q':
-                self.app.quit()
-        elif self.abort_button.cget('state') == 'normal' and event.char == 'b':
-            self.abort()
               
     def reset(self):
         for prog_bar in self.prog_bars:
@@ -185,7 +182,12 @@ class TrainingWindow():
         self.end_training = False
         self.set_status('Standby')
         self.button_frame.disable()
+        
+    def destroy(self): 
+        self.loss_plot.close()
+        self.training_window.destroy()
     
+    # readout adjustment methods
     def set_readout(self, readout, value):
         '''Base method for updating a readout on the menu'''
         readout.configure(text=value)
@@ -206,9 +208,23 @@ class TrainingWindow():
     def set_status(self, status):
         self.set_readout(self.curr_status, status)
     
-    def destroy(self):
-        '''Wrapper for builtin Tkinter destroy method'''
-        self.training_window.destroy()
+    # loss plot adjustment methods
+    def update_loss_plot(self, xval, point):
+        if len(self.loss_plot.lines) <= 1: # scale y-axis to first point if only cutoff or no lines
+            self.loss_plot.set_ylim(0, point) 
+         
+        xmax = self.loss_plot.get_xlim()[1] # second member of xlimits is max
+        if xval > xmax: # increase x scale 10-fold if number of epochs goes off screen
+            self.loss_plot.set_xlim(0, 2*xmax)
+            
+        self.loss_plot.plot(xval, point, 'r.') # plot each new point as red line
+        self.canvas.draw() # update the canvas
+        
+    def reset_loss_plot(self, cutoff=None):     
+        self.loss_plot.lines.clear() 
+        self.loss_plot.set_xlim(0, 100)
+        if cutoff:
+            self.loss_plot.axhline(y=cutoff, linestyle='--', color='c')
         
         
 # Section 2: Start of code for the actual GUI and application ---------------------------------------------------------------------------------------
@@ -704,15 +720,17 @@ class PLATINUMS_App:
                             labels   = [instance.vector for instance in chem_data if instance.species != evaluand or fam_training]
                             x_train, x_test, y_train, y_test = map(np.array, train_test_split(features, labels, test_size=test_set_proportion)) # keras model only accepts numpy arrays
 
+                            train_window.reset_loss_plot(cutoff=(convergence and tolerance or None)) # resetting the loss plot each training round
                             with tf.device('CPU:0'):     # eschews the requirement for a brand-new NVIDIA graphics card (which we don't have anyways)                      
                                 model = Sequential()     # model block is created, layers are added to this block
                                 model.add(Dense(256, input_dim=(upper_bound - lower_bound), activation='relu'))  # 256 neuron input layer, size depends on trimming      
                                 model.add(Dropout(0.5))                                          # dropout layer, to reduce overfit
                                 model.add(Dense(256, activation='relu'))                         # 256 neuron hidden layer
-                                model.compile(loss='categorical_crossentropy', optimizer=Adam(lr=learnrate), metrics=['accuracy']) '''                              
-                                model.add(Dense(150, input_dim=(upper_bound - lower_bound), activation='tanh'))  # 512 neuron input layer, size depends on trimming
                                 model.add(Dense(len(self.family_mapping), activation='softmax')) # softmax gives probability distribution of identity over all families
-                                model.compile(loss='categorical_crossentropy', optimizer=RMSprop(lr=learnrate), metrics=['accuracy']) '''
+                                model.compile(loss='categorical_crossentropy', optimizer=Adam(lr=learnrate), metrics=['accuracy'])                               
+                                #model.add(Dense(150, input_dim=(upper_bound - lower_bound), activation='tanh'))  # 512 neuron input layer, size depends on trimming
+                                #model.add(Dense(len(self.family_mapping), activation='softmax')) # softmax gives probability distribution of identity over all families
+                                #model.compile(loss='categorical_crossentropy', optimizer=RMSprop(lr=learnrate), metrics=['accuracy'])   
                             hist = model.fit(x_train, y_train, validation_data=(x_test, y_test), callbacks=keras_callbacks, verbose=keras_verbosity, epochs=num_epochs, batch_size=batchsize)
                     
                         if model.stop_training: # if training has been interrupted for whatever reason                             
