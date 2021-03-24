@@ -3,6 +3,8 @@ Widgets, in the order they appear, are ConfirmButton, StatusBox, DynOptionMenu, 
 NumberedProgBar, LabelledEntry, Switch, GroupableCheck, CheckPanel, and SelectionWindow'''
 import tkinter as tk
 import tkinter.ttk as ttk
+import matplotlib.pyplot as plt
+from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
 
 
 class ConfirmButton: 
@@ -308,3 +310,71 @@ class SelectionWindow:
         '''Confirm selections and exit selection window'''
         self.parent.enable()
         self.window.destroy()
+        
+        
+class DynamicPlot:
+    def __init__(self, main, title, xlabel, ylabel, x_default=100, y_default=1, figsize=5, dpi=45, row=0, col=0, rs=1, cs=1):
+        '''A matplotlib plot embedded in a TK window which can efficiently plot and update lines through arbitrary point'''
+        self.fig = plt.figure(figsize=(figsize, figsize), dpi=dpi)       
+        self.plot_window = FigureCanvasTkAgg(self.fig, main)
+        self.plot_window.get_tk_widget().grid(row=row, column=col, rowspan=rs, columnspan=cs)
+        self.x_default, self.y_default = x_default, y_default 
+        
+        self.ax = self.fig.add_subplot(1, 1, 1)
+        self.ax.set_title(title)
+        self.ax.set_xlabel(xlabel)
+        self.ax.set_ylabel(ylabel)   
+
+        self.bg = None
+        self.x, self.y = [], []  
+        (self.line,) = self.ax.plot(self.x, self.y, 'r-', animated=True)
+        self.reset()
+        
+    def __del__(self):
+        plt.close() # close figure upon destruction (mainly applies to IPython window)
+    
+    def redraw(self):
+        '''Redraw figure and recapture background'''
+        self.plot_window.draw()
+        self.bg = self.fig.canvas.copy_from_bbox(self.fig.bbox)
+    
+    def update_xvals(self, x):
+        '''Add new x-value to relevant containers. Double x-axis range if a points x-value exceed the current x limits'''
+        self.x.append(x)
+        self.line.set_xdata(self.x)
+        
+        xmax = max(self.ax.get_xlim()) # second member of xlimits is max
+        if x > xmax: # increase x scale 10-fold if number of epochs goes off screen
+            self.ax.set_xlim(0, 2*xmax)
+            self.redraw()        
+            
+    def update_yvals(self, y):
+        '''Add new y-value to relevant containers. Expand y-axis range to accomodate a new point if its y-value exceed the current y limits'''
+        self.y.append(y)
+        self.line.set_ydata(self.y)
+    
+        ymax = max(self.ax.get_ylim()) # second member of xlimits is max
+        if y > ymax: # increase x scale 10-fold if number of epochs goes off screen
+            self.ax.set_ylim(0, y)
+            self.redraw() 
+            
+    def update(self, x, y): 
+        '''Plot a new point (x, y) along the existing line'''
+        self.update_xvals(x)
+        self.update_yvals(y)
+
+        self.fig.canvas.restore_region(self.bg)
+        self.ax.draw_artist(self.line)
+        self.fig.canvas.blit(self.ax.bbox)           
+    
+    def reset(self, cutoff=None):    
+        '''Blank out and reset plot'''
+        for data_list in (self.x, self.y, self.ax.lines):
+            data_list.clear()
+        
+        if cutoff:
+            self.ax.axhline(y=cutoff, linestyle='--', color='c')
+            
+        self.ax.set_xlim(0, self.x_default)
+        self.ax.set_ylim(0, self.y_default)
+        self.redraw()
