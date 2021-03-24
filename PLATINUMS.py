@@ -17,11 +17,11 @@ from tkinter import filedialog
 # PIP-installed Imports                
 import numpy as np
 import matplotlib.pyplot as plt
-import matplotlib.animation as animation
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
 from sklearn.model_selection import train_test_split
 
-import tensorflow as tf     # Neural Net Libraries
+# Neural Net Libraries
+import tensorflow as tf     
 from tensorflow.keras import metrics                  
 from tensorflow.keras.optimizers import Adam, RMSprop
 from tensorflow.keras.models import Sequential, load_model
@@ -34,22 +34,24 @@ tf.get_logger().setLevel('ERROR') # suppress deprecation warnings which seem to 
 class TkEpochs(Callback):   
     '''A custom keras Callback for interfacing between the current model training epoch and the training window'''
     def __init__(self, training_window):
-        super(Callback, self).__init__()
+        super().__init__()
         self.tw = training_window
     
     def on_epoch_begin(self, epoch, logs=None): # update the epoch progress bar at the start of each epoch
-        self.tw.epoch_progress.set_progress(epoch + 1)
+        if epoch == 0: # reset progress bar with each new training
+            self.tw.epoch_progress.reset()      
+        self.tw.epoch_progress.increment() # increment progress each epoch
         self.tw.app.main.update() # allows for mobility of the main window while training
         
     def on_epoch_end(self, epoch, logs=None):  # abort training if the abort flag has been raised by the training window
-        self.tw.update_loss_plot(epoch, logs.get('loss'))
+        self.tw.loss_plot.update(epoch, logs.get('loss'))
         if self.tw.end_training:
             self.model.stop_training = True
             
 class Convergence(Callback):   
     '''A custom keras Callback which facilitates early stopping of training when loss convergence is reached'''
     def __init__(self, threshold):
-        super(Callback, self).__init__()
+        super().__init__()
         self.threshold = threshold
         self.stopped_epoch = None
         
@@ -69,16 +71,6 @@ class TrainingWindow():
         self.training_window.title('Training Progress')
         self.training_window.attributes('-topmost', True)
         self.end_training = False # flag for aborting training
-        
-        # Live Training Loss Plot
-        self.loss_figure = plt.figure(figsize=(5,5), dpi=45)       
-        self.canvas = FigureCanvasTkAgg(self.loss_figure, self.training_window)
-        self.canvas.get_tk_widget().grid(row=0, column=1, rowspan=3)
-        
-        self.loss_plot = self.loss_figure.add_subplot(1, 1, 1)
-        self.loss_plot.set_title('Progress Monitor')
-        self.loss_plot.set_xlabel('Training Epoch')
-        self.loss_plot.set_ylabel('Training Loss')
         
         # Status Printouts
         self.status_frame = tk.Frame(self.training_window, bd=2, padx=9, relief='groove')
@@ -140,6 +132,9 @@ class TrainingWindow():
         self.abort_button = tk.Button(self.training_window, text='Abort Training', width=54, underline=1, bg='sienna2', command=self.abort)
         self.abort_button.grid(row=2, column=0, pady=(0,2))
         
+        # Dynamically-updatable loss plot
+        self.loss_plot = ttl.DynamicPlot(self.training_window, 'Progress Monitor', 'Training Epoch', 'Training Loss', row=0, col=1, rs=3, cs=1)
+        
         self.training_window.bind('<Key>', self.key_bind)
         self.reset() # ensure menu begins at default status when instantiated
     
@@ -184,7 +179,6 @@ class TrainingWindow():
         self.button_frame.disable()
         
     def destroy(self): 
-        self.loss_plot.close()
         self.training_window.destroy()
     
     # readout adjustment methods
@@ -207,25 +201,7 @@ class TrainingWindow():
     
     def set_status(self, status):
         self.set_readout(self.curr_status, status)
-    
-    # loss plot adjustment methods
-    def update_loss_plot(self, xval, point):
-        if len(self.loss_plot.lines) <= 1: # scale y-axis to first point if only cutoff or no lines
-            self.loss_plot.set_ylim(0, point) 
-         
-        xmax = self.loss_plot.get_xlim()[1] # second member of xlimits is max
-        if xval > xmax: # increase x scale 10-fold if number of epochs goes off screen
-            self.loss_plot.set_xlim(0, 2*xmax)
-            
-        self.loss_plot.plot(xval, point, 'r.') # plot each new point as red line
-        self.canvas.draw() # update the canvas
-        
-    def reset_loss_plot(self, cutoff=None):     
-        self.loss_plot.lines.clear() 
-        self.loss_plot.set_xlim(0, 100)
-        if cutoff:
-            self.loss_plot.axhline(y=cutoff, linestyle='--', color='c')
-        
+
         
 # Section 2: Start of code for the actual GUI and application ---------------------------------------------------------------------------------------
 class PLATINUMS_App:
@@ -236,7 +212,7 @@ class PLATINUMS_App:
     def __init__(self, main):       
     #Main Window
         self.main = main
-        self.main.title('PLATINUMS v-6.0.0a') # set name with version here
+        self.main.title('PLATINUMS v-6.1.0a') # set name with version here
         self.parameters = {}
         
         self.data_path.mkdir(exist_ok=True)  
@@ -609,7 +585,7 @@ class PLATINUMS_App:
                         return # return None if overwrite is not allowed
             return parent_folder # return path-like object pointing to folder if successful
     
-    def training(self, test_set_proportion=0.2, keras_verbosity=0): # use keras_verbosity of 2 for lengthy and detailed console printouts
+    def training(self, test_set_proportion=0.2, keras_verbosity=0, nw_compat=False): # use keras_verbosity of 2 for lengthy and detailed console printouts
         '''The function defining the neural network training sequence and parameters'''
         overall_start_time = time() # get start of runtime for entire training routine
         plotutils.Base_RC.set_uc_mapping(self.family_mapping) # set unit circle mapping for radar charts
@@ -720,17 +696,19 @@ class PLATINUMS_App:
                             labels   = [instance.vector for instance in chem_data if instance.species != evaluand or fam_training]
                             x_train, x_test, y_train, y_test = map(np.array, train_test_split(features, labels, test_size=test_set_proportion)) # keras model only accepts numpy arrays
 
-                            train_window.reset_loss_plot(cutoff=(convergence and tolerance or None)) # resetting the loss plot each training round
+                            train_window.loss_plot.reset(cutoff=(convergence and tolerance or None)) # resetting the loss plot each training round
                             with tf.device('CPU:0'):     # eschews the requirement for a brand-new NVIDIA graphics card (which we don't have anyways)                      
                                 model = Sequential()     # model block is created, layers are added to this block
-                                model.add(Dense(256, input_dim=(upper_bound - lower_bound), activation='relu'))  # 256 neuron input layer, size depends on trimming      
-                                model.add(Dropout(0.5))                                          # dropout layer, to reduce overfit
-                                model.add(Dense(256, activation='relu'))                         # 256 neuron hidden layer
-                                model.add(Dense(len(self.family_mapping), activation='softmax')) # softmax gives probability distribution of identity over all families
-                                model.compile(loss='categorical_crossentropy', optimizer=Adam(lr=learnrate), metrics=['accuracy'])                               
-                                #model.add(Dense(150, input_dim=(upper_bound - lower_bound), activation='tanh'))  # 512 neuron input layer, size depends on trimming
-                                #model.add(Dense(len(self.family_mapping), activation='softmax')) # softmax gives probability distribution of identity over all families
-                                #model.compile(loss='categorical_crossentropy', optimizer=RMSprop(lr=learnrate), metrics=['accuracy'])   
+                                if nw_compat:            # provide option to switch between NeuralWare model configuration (for comparison) or optimized standard configuration
+                                    model.add(Dense(150, input_dim=(upper_bound - lower_bound), activation='tanh'))  # 512 neuron input layer, size depends on trimming
+                                    model.add(Dense(len(self.family_mapping), activation='softmax')) # softmax gives probability distribution of identity over all families
+                                    model.compile(loss='categorical_crossentropy', optimizer=RMSprop(lr=learnrate), metrics=['accuracy']) 
+                                else:   
+                                    model.add(Dense(256, input_dim=(upper_bound - lower_bound), activation='relu'))  # 256 neuron input layer, size depends on trimming      
+                                    model.add(Dropout(0.5))                                          # dropout layer, to reduce overfit
+                                    model.add(Dense(256, activation='relu'))                         # 256 neuron hidden layer
+                                    model.add(Dense(len(self.family_mapping), activation='softmax')) # softmax gives probability distribution of identity over all families
+                                    model.compile(loss='categorical_crossentropy', optimizer=Adam(lr=learnrate), metrics=['accuracy'])      
                             hist = model.fit(x_train, y_train, validation_data=(x_test, y_test), callbacks=keras_callbacks, verbose=keras_verbosity, epochs=num_epochs, batch_size=batchsize)
                     
                         if model.stop_training: # if training has been interrupted for whatever reason                             
