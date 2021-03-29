@@ -208,15 +208,17 @@ class PLATINUMS_App:
     '''PLATINUMS : Prediction, Training, And Labelling INterface for Unlabelled Mobility Spectra'''
     data_path = Path('TDMS Datasets')          # specify here which folder to look in to find datasets
     save_path = Path('Saved Training Results') # specify here which folders to save results to
+    preset_path = Path('Training Presets')     # specify here which folders to save/retrieve training presets
     
     def __init__(self, main):       
     #Main Window
         self.main = main
-        self.main.title('PLATINUMS v-6.1.0a') # set name with version here
+        self.main.title('PLATINUMS v-6.1.5a') # set name with version here
         self.parameters = {}
         
         self.data_path.mkdir(exist_ok=True)  
-        self.save_path.mkdir(exist_ok=True)  # will make directories if they don't already exist
+        self.save_path.mkdir(exist_ok=True)  
+        self.preset_path.mkdir(exist_ok=True) # will make directories if they don't already exist
 
     # General Buttons
         self.tpmode = tk.BooleanVar() # option to switch from training to prediction mode, WIP and disabled for now
@@ -386,7 +388,7 @@ class PLATINUMS_App:
             elif event.char == 's': # add hotkey to save preset and proceed...
                 self.save_preset.set(not self.save_preset.get()) # invert cycling status
             #elif event.char == 'n': # add hotkey to save preset and proceed...
-            #    self.blank_var2.set(not self.blank_var2.get()) # invert cycling status
+            #    self.blank_var2.set(not self.blank_var2.get()) # invert status
             elif event.char == 'c': # or just to proceed
                 self.confirm_tparams()
         elif self.activation_frame.state == 'normal' and event.char == 't': # do not allow hotkeys to work if frame is disabled
@@ -420,7 +422,7 @@ class PLATINUMS_App:
                                 self.parameters['data_files'], window_title='Select data file(s) to train over', ncols=4)    
             
         elif self.input_mode.get() == 'Preset from File': 
-            preset_path = Path(filedialog.askopenfilename(title='Choose Training Preset', initialdir='./Training Presets', filetypes=(('JSONs', '*.json'),) ))
+            preset_path = Path(filedialog.askopenfilename(title='Choose Training Preset', initialdir=self.preset_path, filetypes=(('JSONs', '*.json'),) ))
             try: 
                 with preset_path.open() as preset_file: # load in the parameter preset (ALL settings)   
                     self.parameters = json.load(preset_file)   
@@ -539,7 +541,7 @@ class PLATINUMS_App:
             self.parameters[param] = field.get_value() # configure parameters based on the switch values
 
         if self.save_preset.get(): # if the user has elected to save the current preset
-            preset_path = Path( filedialog.asksaveasfilename(title='Save Preset to file', initialdir='./Training Presets', defaultextension='.json', filetypes=[('JSONs', '*.json')]) )
+            preset_path = Path( filedialog.asksaveasfilename(title='Save Preset to file', initialdir=self.preset_path, defaultextension='.json', filetypes=[('JSONs', '*.json')]) )
             try: 
                 with open(preset_path, 'w') as preset_file:
                     json.dump(self.parameters, preset_file)
@@ -612,8 +614,8 @@ class PLATINUMS_App:
         if not parent_folder: # if file determination returns empty due to user cancellation/omission, exit training routine
             return
                 
-        preset_path = parent_folder/'Training Preset.json'
-        with preset_path.open(mode='w') as preset_file: 
+        local_preset_path = parent_folder/'Training Preset.json'
+        with local_preset_path.open(mode='w') as preset_file: 
             json.dump(self.parameters, preset_file) # save current training settings to a preset for reproducability
         
         # PREPARING GUI FOR TRAINING
@@ -624,7 +626,7 @@ class PLATINUMS_App:
 
         keras_callbacks = [TkEpochs(train_window)] # in every case, add the tkinter-keras interface callback to the callbacks list   
         if convergence:
-            num_epochs = 100000 # set epoch size to very large number to account for unconstrained traning
+            num_epochs = 1000000 # set epoch size to very large number to account for unconstrained traning
             convergence_callback = Convergence(tolerance) # named so this parameter can be referenced within code after stopping
             keras_callbacks.append(convergence_callback)
         
@@ -702,13 +704,13 @@ class PLATINUMS_App:
                                 if nw_compat:            # provide option to switch between NeuralWare model configuration (for comparison) or optimized standard configuration
                                     model.add(Dense(150, input_dim=(upper_bound - lower_bound), activation='tanh'))  # 512 neuron input layer, size depends on trimming
                                     model.add(Dense(len(self.family_mapping), activation='softmax')) # softmax gives probability distribution of identity over all families
-                                    model.compile(loss='categorical_crossentropy', optimizer=RMSprop(lr=learnrate), metrics=['accuracy']) 
+                                    model.compile(loss='categorical_crossentropy', optimizer=RMSprop(lr=learnrate), metrics=['categorical_accuracy']) 
                                 else:   
                                     model.add(Dense(256, input_dim=(upper_bound - lower_bound), activation='relu'))  # 256 neuron input layer, size depends on trimming      
                                     model.add(Dropout(0.5))                                          # dropout layer, to reduce overfit
                                     model.add(Dense(256, activation='relu'))                         # 256 neuron hidden layer
                                     model.add(Dense(len(self.family_mapping), activation='softmax')) # softmax gives probability distribution of identity over all families
-                                    model.compile(loss='categorical_crossentropy', optimizer=Adam(lr=learnrate), metrics=['accuracy'])      
+                                    model.compile(loss='categorical_crossentropy', optimizer=Adam(lr=learnrate), metrics=['categorical_accuracy'])      
                             hist = model.fit(x_train, y_train, validation_data=(x_test, y_test), callbacks=keras_callbacks, verbose=keras_verbosity, epochs=num_epochs, batch_size=batchsize)
                     
                         if model.stop_training: # if training has been interrupted for whatever reason                             
@@ -744,9 +746,9 @@ class PLATINUMS_App:
                             predictions[curr_family][evaluand][inst_name] = [float(i) for i in pred] # convert to list of floats for JSON serialization 
                             
                         # obtain and file current evaluand score, plotting summary graphics in the process; overwrites empty dictionary
-                        final_evals = model.evaluate(x_test, y_test, verbose=keras_verbosity)  # keras' self evaluation of loss and accuracy metric
+                        final_evals = model.evaluate(x_test, y_test, verbose=keras_verbosity)  # keras' self evaluation of loss and categorical_accuracy metric
                         round_summary[curr_family][evaluand] = plotutils.plot_and_get_score(evaluand, eval_spectra, predictions, hist.history['loss'],
-                                                                                             hist.history['accuracy'], final_evals, savedir=curr_slice_folder)                
+                                                                                             hist.history['categorical_accuracy'], final_evals, savedir=curr_slice_folder)                
                     # CALCULATION AND PROCESSING OF RESULTS TO PRODUCE SCORES AND SUMMARIES 
                     train_window.set_status(f'Unpacking Scores...')
                     
@@ -786,7 +788,7 @@ class PLATINUMS_App:
                     log_file.write(f'\nTraining Time : {iumsutils.format_time(time() - start_time)}') # log the time taken for this particular training session as well
         
         # POST-TRAINING WRAPPING-UP   
-        if cycle_fams: # if both familiar and unfamiliar traning are being performed, merge the score files together
+        if cycle_fams: # if both familiar and unfamiliar training are being performed, merge the score files together
             for point_range in point_ranges:
                 fam_path   = parent_folder/f'Compiled Results - {point_range}, Familiar.csv' 
                 unfam_path = parent_folder/f'Compiled Results - {point_range}, Unfamiliar.csv'
