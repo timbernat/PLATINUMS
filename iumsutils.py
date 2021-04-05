@@ -44,6 +44,14 @@ def multikey(some_dict, keyset):
     '''Takes a dictionary and an iterable of keys and returns Bool of whether or not the dict contains ALL of the listed keys'''
     return all(key in some_dict for key in keyset)
 
+def partition(iterable, condition):
+    '''Separates an iterable into two lists based on a truthy condition which can be applied to each item.
+    Returns two lists, the first containing those which meet the condition and the second containing the rest'''
+    members, non_members = [], []
+    for item in iterable:
+        (members if condition(item) else non_members).append(item)
+    return members, non_members
+
 def one_hot_mapping(iterable):
     '''Takes and iterable and returns a dictionary of the values in the iterable, assigned sequentially to one-hot vectors
     each of which is the length of the iterable (akin to an identity matrix)'''
@@ -102,17 +110,8 @@ def get_carbon_ordering(species):
     else:
         return 100 # arbitrary, needs to return a number much greater than the rest to be placed at end
 
-Instance = collections.namedtuple('Instance', ['name', 'species', 'family', 'spectrum', 'vector']) # provide class=like encoding of instances
-'''
-class Instance:
-    #A single instance of a particular chemical, useful for storing and accessing chemical and spectral information during training and transformations
-    def __init__(self, name, species, family, spectrum, vector):
-        self.name     = name
-        self.species  = species
-        self.family   = family
-        self.spectrum = spectrum
-        self.vector   = vector
-    '''        
+Instance = collections.namedtuple('Instance', ['name', 'species', 'family', 'spectrum', 'vector']) # provide class-like encoding of instances
+
         
 #file and path utilities
 def sanitized_path(path, ext='.json'):
