@@ -1,238 +1,49 @@
 # Custom Imports
 import iumsutils           # library of functions specific to my "-IUMS" class of MS Neural Network applications
-import plotutils           # library of plotting utilities useful for summarizing and visualizing training results
 import TimTkLib as ttl     # library of custom tkinter widgets I've written to make GUI assembly more straightforward 
+from PLATINUMS_Trainer import TrainingWindow # the trainer component of the app
 
-# Built-in Imports
-import json, os
-from time import time                      
-from pathlib import Path
+# Built-in Imports    
+import json
+from pathlib import Path 
 
-# Built-In GUI imports
+# Built-in GUI Imports 
 import tkinter as tk   
 from tkinter import messagebox
 from tkinter import simpledialog
 from tkinter import filedialog
 
-# PIP-installed Imports                
-import numpy as np
-import matplotlib.pyplot as plt
-from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
-from sklearn.model_selection import train_test_split
 
-# Neural Net Libraries
-import tensorflow as tf     
-from tensorflow.keras import metrics                  
-from tensorflow.keras.optimizers import Adam, RMSprop
-from tensorflow.keras.models import Sequential, load_model
-from tensorflow.keras.layers import Dense, Dropout
-from tensorflow.keras.callbacks import Callback
-tf.get_logger().setLevel('ERROR') # suppress deprecation warnings which seem to riddle tensorflow
-
-
-# SECTION 1 : custom classes needed to operate some features of the main GUI  ---------------------------------------------------                   
-class TkEpochs(Callback):   
-    '''A custom keras Callback for interfacing between the current model training epoch and the training window'''
-    def __init__(self, training_window):
-        super().__init__()
-        self.tw = training_window
-    
-    def on_epoch_begin(self, epoch, logs=None): # update the epoch progress bar at the start of each epoch
-        if epoch == 0: # reset progress bar with each new training
-            self.tw.epoch_progress.reset()      
-        self.tw.epoch_progress.increment() # increment progress each epoch
-        self.tw.app.main.update() # allows for mobility of the main window while training
-        
-    def on_epoch_end(self, epoch, logs=None):  # abort training if the abort flag has been raised by the training window
-        self.tw.loss_plot.update(epoch, logs.get('loss'))
-        if self.tw.end_training:
-            self.model.stop_training = True
-            
-class Convergence(Callback):   
-    '''A custom keras Callback which facilitates early stopping of training when loss convergence is reached'''
-    def __init__(self, threshold):
-        super().__init__()
-        self.threshold = threshold
-        self.stopped_epoch = None
-        
-    def on_epoch_end(self, epoch, logs=None):  # abort training if the abort flag has been raised by the training window
-        if logs.get('loss') < self.threshold:
-            self.model.stop_training = True # immediately terminate training
-            self.stopped_epoch = epoch + 1  # flag current epoch (1-indexed) as the point of termination
-            
-    def reset_flag(self):
-        self.stopped_epoch = None
-
-class TrainingWindow(): 
-    '''The window which displays training progress and information, subclassed TopLevel allows it to be separate from the main GUI'''
-    def __init__(self, main_app):
-        self.app = main_app # the main app GUI itself (as an object)
-        self.training_window = tk.Toplevel(self.app.main)
-        self.training_window.title('Training Progress')
-        self.training_window.attributes('-topmost', True)
-        self.end_training = False # flag for aborting training
-        
-        # Status Printouts
-        self.status_frame = tk.Frame(self.training_window, bd=2, padx=9, relief='groove')
-        self.status_frame.grid(row=0, column=0)
-        
-        self.file_label     = tk.Label(self.status_frame, text='Current Data File: ')
-        self.curr_file      = tk.Label(self.status_frame)
-        self.evaluand_label = tk.Label(self.status_frame, text='Current Evaluand: ')
-        self.curr_evaluand  = tk.Label(self.status_frame)
-        self.slice_label    = tk.Label(self.status_frame, text='Current Data Slice: ')
-        self.curr_slice     = tk.Label(self.status_frame)
-        self.fam_label      = tk.Label(self.status_frame, text='Evaluation Type: ')
-        self.curr_fam       = tk.Label(self.status_frame)
-        
-        self.epoch_label       = tk.Label(self.status_frame, text='Training Epoch: ')
-        self.epoch_progress    = ttl.NumberedProgBar(self.status_frame, row=4, col=1)
-        self.round_label       = tk.Label(self.status_frame, text='Evaluation Round: ')
-        self.round_progress    = ttl.NumberedProgBar(self.status_frame, style_num=2, row=5, col=1) 
-        self.file_num_label    = tk.Label(self.status_frame, text='Datafile Number: ')
-        self.file_num_progress = ttl.NumberedProgBar(self.status_frame, style_num=3, row=6, col=1) 
-        
-        self.status_label   = tk.Label(self.status_frame, text='Current Status: ')
-        self.curr_status    = tk.Label(self.status_frame)
-        
-        self.file_label.grid(    row=0, column=0, sticky='w')
-        self.curr_file.grid(     row=0, column=1, sticky='w')
-        self.evaluand_label.grid(row=1, column=0, sticky='w')
-        self.curr_evaluand.grid( row=1, column=1, sticky='w')
-        self.slice_label.grid(   row=2, column=0, sticky='w')
-        self.curr_slice.grid(    row=2, column=1, sticky='w')
-        self.fam_label.grid(     row=3, column=0, sticky='w')
-        self.curr_fam.grid(      row=3, column=1, sticky='w')
-        
-        self.epoch_label.grid(   row=4, column=0, sticky='w')
-        #self.epoch_progress, like all ttl widgets, has gridding built-in
-        self.round_label.grid(   row=5, column=0, sticky='w')      
-        #self.round_progress, like all ttl widgets, has gridding built-in
-        self.file_num_label.grid(row=6, column=0, sticky='w')
-        #self.file_num_progress, like all ttl widgets, has gridding built-in
-        
-        self.status_label.grid(  row=7, column=0, sticky='w')
-        self.curr_status.grid(   row=7, column=1, sticky='w')
-        
-        self.readouts  = (self.curr_file, self.curr_evaluand, self.curr_slice, self.curr_fam) # omitted self.curr_status, as it is not reset in the same way as the other readouts
-        self.prog_bars = (self.round_progress, self.epoch_progress)
-        
-        #Training Buttons
-        self.button_frame = ttl.ToggleFrame(self.training_window, text='', padx=0, pady=0, row=1) # leave commands as they are (internal methods destroy train window also) 
-        
-        self.retrain_button    = tk.Button(self.button_frame, text='Retrain', width=17, underline=2, bg='deepskyblue2', command=self.retrain) 
-        self.reset_main_button = tk.Button(self.button_frame, text='Reset',   width=17, underline=0, bg='orange', command=self.reset_main)
-        self.quit_button       = tk.Button(self.button_frame, text='Quit',    width=17, underline=0, bg='red', command=self.app.quit)
-        
-        self.retrain_button.grid(   row=0, column=0)
-        self.reset_main_button.grid(row=0, column=1)
-        self.quit_button.grid(      row=0, column=2) 
-        
-        # Abort Button, standalone and frameless
-        self.abort_button = tk.Button(self.training_window, text='Abort Training', width=54, underline=1, bg='sienna2', command=self.abort)
-        self.abort_button.grid(row=2, column=0, pady=(0,2))
-        
-        # Dynamically-updatable loss plot
-        self.loss_plot = ttl.DynamicPlot(self.training_window, 'Progress Monitor', 'Training Epoch', 'Training Loss', row=0, col=1, rs=3, cs=1)
-        
-        self.training_window.bind('<Key>', self.key_bind)
-        self.reset() # ensure menu begins at default status when instantiated
-    
-    def key_bind(self, event):
-        '''command to bind hotkeys, contingent on menu enabled status'''
-        if self.button_frame.state == 'normal':
-            if event.char == 't':
-                self.retrain()
-            elif event.char == 'r':
-                self.reset_main()
-            elif event.char == 'q':
-                self.app.quit()
-        elif self.abort_button.cget('state') == 'normal' and event.char == 'b':
-            self.abort()
-    
-    # Button methods
-    def retrain(self):
-        self.destroy()      # kill self (to avoid persistence issues)
-        self.app.training() # run the main window's training function
-        
-    def reset_main(self):
-        self.destroy()   # kill self (to avoid persistence issues)
-        self.app.reset() # reset the main window
-    
-    def abort(self):
-        self.end_training = True      
-        self.set_status('Training Aborted')
-        
-        self.abort_button.configure(state='disabled')
-        self.button_frame.enable()
-              
-    def reset(self):
-        for prog_bar in self.prog_bars:
-            prog_bar.set_progress(0)
-            self.app.main.update()
-            
-        for readout in self.readouts:
-            self.set_readout(readout, '---')
-        
-        self.end_training = False
-        self.set_status('Standby')
-        self.button_frame.disable()
-        
-    def destroy(self): 
-        self.training_window.destroy()
-    
-    # readout adjustment methods
-    def set_readout(self, readout, value):
-        '''Base method for updating a readout on the menu'''
-        readout.configure(text=value)
-        self.app.main.update()
-    
-    def set_file(self, file):
-        self.set_readout(self.curr_file, file)
-    
-    def set_evaluand(self, evaluand):
-        self.set_readout(self.curr_evaluand, evaluand)
-    
-    def set_slice(self, data_slice):
-        self.set_readout(self.curr_slice, data_slice)
-    
-    def set_familiar_status(self, fam_status):
-        self.set_readout(self.curr_fam, fam_status)
-    
-    def set_status(self, status):
-        self.set_readout(self.curr_status, status)
-
-        
-# Section 2: Start of code for the actual GUI and application ---------------------------------------------------------------------------------------
 class PLATINUMS_App:
     '''PLATINUMS : Prediction, Training, And Labelling INterface for Unlabelled Mobility Spectra'''
-    data_path = Path('TDMS Datasets')          # specify here which folder to look in to find datasets
-    save_path = Path('Saved Training Results') # specify here which folders to save results to
-    preset_path = Path('Training Presets')     # specify here which folders to save/retrieve training presets
+    default_paths = {'data_path'    : Path('TDMS Datasets'),  # configure names of default file locations here
+                     'preset_path'  : Path('Training Presets'),
+                     'save_path'    : Path('Saved Training Results'),
+                     'weights_path' : Path('Saved Models')}
     
     def __init__(self, main):       
     #Main Window
         self.main = main
-        self.main.title('PLATINUMS v-6.1.5a') # set name with version here
+        self.main.title('PLATINUMS v-7.0.0a') # set name with version here
         self.parameters = {}
         
-        self.data_path.mkdir(exist_ok=True)  
-        self.save_path.mkdir(exist_ok=True)  
-        self.preset_path.mkdir(exist_ok=True) # will make directories if they don't already exist
+        for path_type, path in self.default_paths.items(): # on creation, reference class-wide default paths to set up appropriate folders
+            path.mkdir(exist_ok=True) # create the path
+            setattr(self, path_type, path) # map said path to an internal object attribute
 
-    # General Buttons
         self.tpmode = tk.BooleanVar() # option to switch from training to prediction mode, WIP and disabled for now
         
         self.quit_button   = tk.Button(self.main, text='Quit', underline=0, padx=22, pady=11, bg='red', command=self.quit)
-        self.tpmode_button = tk.Checkbutton(self.main, text='Predict', var=self.tpmode, command=self.switch_tpmode, state='disabled')
+        self.tpmode_button = tk.Checkbutton(self.main, text='Predict', var=self.tpmode, underline=2, command=self.switch_tpmode, state='disabled')
         self.reset_button  = tk.Button(self.main, text='Reset', underline=0, padx=20, bg='orange', command=self.reset)
         
         self.quit_button.grid(  row=0, column=4, sticky='s')
         self.tpmode_button.grid(row=2, column=4)
         self.reset_button.grid( row=6, column=4, padx=2)
         
-        self.main.bind('q', lambda event : self.quit()) # universally bind quit and reset actions to keys (irrespective of which cell is enabled)
-        #self.main.bind('p', lambda event : self.switch_tpmode()) 
+        # Primary menu method - universally keybound, irrespective of which cell is enabled
+        self.main.bind('q', lambda event : self.quit()) 
+        self.main.bind('e', lambda event : self.tpmode_button.invoke()) # doesn't work while button is disabled, due to invoke (not by accident)
         self.main.bind('r', lambda event : self.reset())  
         
     # Frame 0
@@ -422,10 +233,12 @@ class PLATINUMS_App:
                                 self.parameters['data_files'], window_title='Select data file(s) to train over', ncols=4)    
             
         elif self.input_mode.get() == 'Preset from File': 
-            preset_path = Path(filedialog.askopenfilename(title='Choose Training Preset', initialdir=self.preset_path, filetypes=(('JSONs', '*.json'),) ))
+            preset_path = Path(filedialog.askopenfilename(title='Choose Training Preset', initialdir='./Training Presets', filetypes=(('JSONs', '*.json'),) ))
             try: 
                 with preset_path.open() as preset_file: # load in the parameter preset (ALL settings)   
-                    self.parameters = json.load(preset_file)   
+                    self.parameters = json.load(preset_file)  
+            except json.decoder.JSONDecodeError:        
+                messagebox.showerror('Preset Format Error', 'Incorrect formatting in preset file;\n Please check preset for errors and try again')        
             except PermissionError: # do nothing if user cancels selection
                 self.input_mode.set(0) 
     
@@ -541,7 +354,7 @@ class PLATINUMS_App:
             self.parameters[param] = field.get_value() # configure parameters based on the switch values
 
         if self.save_preset.get(): # if the user has elected to save the current preset
-            preset_path = Path( filedialog.asksaveasfilename(title='Save Preset to file', initialdir=self.preset_path, defaultextension='.json', filetypes=[('JSONs', '*.json')]) )
+            preset_path = Path( filedialog.asksaveasfilename(title='Save Preset to file', initialdir='./Training Presets', defaultextension='.json', filetypes=[('JSONs', '*.json')]) )
             try: 
                 with open(preset_path, 'w') as preset_file:
                     json.dump(self.parameters, preset_file)
@@ -551,263 +364,26 @@ class PLATINUMS_App:
         self.isolate(self.activation_frame) # make the training button clickable if all goes well
              
     # Frame 5: the training routine itself, this is where the magic happens
-    def prepare_result_folder(self, default_name=''):
-        '''Handles folder naming and overwriting pre-training to guarantee results have a unique folder into which they can be written'''
-        parent_name = simpledialog.askstring(title='Set Result Folder Name', prompt='Please enter a name to save training results under:',
-                                             initialvalue=default_name)   
-        if not parent_name: # if user cancels operation or leaves field blank, return and do not proceed with training
-            return            
-        else:  # otherwise, begin file checking loop  
-            parent_folder = self.save_path/parent_name # same name applied to Path object, useful for incrementing file_id during overwrite checking
-            file_id = 0
-            while True: 
-                try: # if no file exists, can make a new one and proceed without issue
-                    parent_folder.mkdir(exist_ok=False) 
-                    break
-                except FileExistsError: # if one DOES exist, enter checking logic
-                    if not any(parent_folder.iterdir()): # if the file exists but is empty, can also proceed with no issues
-                        break 
-                    elif (parent_folder/'Training Preset.json').exists(): # otherwise, if the folder has a preset present...
-                        with (parent_folder/'Training Preset.json').open() as existing_preset_file: 
-                            existing_preset = json.load(existing_preset_file)
-
-                        if existing_preset != self.parameters: # ...and if the preset differs from the current preset, start checks over with incremented name
-                            file_id += 1
-                            parent_folder = self.save_path/f'{parent_name}({file_id})' # appends differentiating number to end of duplicated files 
-                            continue # return to start of checking loop
-
-                    # this branch is only executed if no preset file is found OR (implicitly) if the existing preset matches the one found
-                    if messagebox.askyesno('Request Overwrite', 'Folder with same name and training parameters found; Allow overwrite of folder?'):
-                        try:
-                            iumsutils.clear_folder(parent_folder) # empty the folder if permission is given
-                            break
-                        except PermissionError: # if emptying fails because user forgot to close files, notify them and exit training loop
-                            messagebox.showerror('Overwrite Error!', f'Cannot overwrite {parent_folder}\nwhile file(s) are still open;\n\nPlease close files, then try again')
-                    else:
-                        return # return None if overwrite is not allowed
-            return parent_folder # return path-like object pointing to folder if successful
-    
-    def training(self, test_set_proportion=0.2, keras_verbosity=0, nw_compat=False): # use keras_verbosity of 2 for lengthy and detailed console printouts
-        '''The function defining the neural network training sequence and parameters'''
-        overall_start_time = time() # get start of runtime for entire training routine
-        plotutils.Base_RC.set_uc_mapping(self.family_mapping) # set unit circle mapping for radar charts
-        
-        # SHADOWING PARAMETER NAMES INTERNALLY TO EASE READABILITY AND REDUCE NUMBER OF LOOKUPS
-        data_files      = self.parameters['data_files'] 
-        num_epochs      = self.parameters['num_epochs'] 
-        batchsize       = self.parameters['batchsize']
-        learnrate       = self.parameters['learnrate'] 
-         
-        slice_decrement = self.parameters['slice_decrement'] 
-        trimming_min    = self.parameters['trimming_min'] 
-        n_slices        = self.parameters['num_slices'] + 1 # accounts for 0 indexing, makes input-->code easier to understand
-        
-        cycle_fams      = self.parameters['cycle_fams']
-        fam_training    = self.parameters['fam_training']
-        save_weights    = self.parameters['save_weights']
-        convergence     = self.parameters['convergence']   
-        tolerance       = self.parameters['tolerance']
-
-        # FILE MANAGEMENT, GUARANTEES THAT NO ACCIDENTAL OVERWRITES OCCUR AND THAT AN APPROPRIATE EMPTY FOLDER EXISTS TO WRITE RESULTS TO
-        generic_descriptor = f'{convergence and f"{tolerance} Error" or f"{num_epochs} epoch"}, {cycle_fams and "cycled" or (fam_training and "familiar" or "unfamiliar")}'
-        parent_folder = self.prepare_result_folder(default_name=generic_descriptor)
-        if not parent_folder: # if file determination returns empty due to user cancellation/omission, exit training routine
-            return
-                
-        local_preset_path = parent_folder/'Training Preset.json'
-        with local_preset_path.open(mode='w') as preset_file: 
-            json.dump(self.parameters, preset_file) # save current training settings to a preset for reproducability
-        
-        # PREPARING GUI FOR TRAINING
-        self.activation_frame.disable()     # disable training button while training (an idiot-proofing measure)                 
-        train_window = TrainingWindow(self) # pass the GUI app to the training window object to allow for menu manipulation        
-        train_window.round_progress.set_max(len(self.evaluands)*n_slices*(1 + cycle_fams)) # compute and display the number of training rounds to occur
-        train_window.file_num_progress.set_max(len(data_files))
-
-        keras_callbacks = [TkEpochs(train_window)] # in every case, add the tkinter-keras interface callback to the callbacks list   
-        if convergence:
-            num_epochs = 1000000 # set epoch size to very large number to account for unconstrained traning
-            convergence_callback = Convergence(tolerance) # named so this parameter can be referenced within code after stopping
-            keras_callbacks.append(convergence_callback)
-        
-        # BEGINNING OF ACTUAL TRAINING CYCLE, ITERATE THROUGH EVERY DATA FILE PASSED
-        point_ranges = set() # stores the slicing point ranges, used later to spliced together familiar and unfamiliar reulst files - is a set to avoid duplication
-        for file_num, data_file in enumerate(data_files):
-            train_window.reset() # clear training window between different files
-            train_window.set_status('Initializing Training...') 
+    def training(self):
+        '''Initialize a PLATINUMS_Trainer using the inputted parameters'''
+        if self.parameters['convergence']:
+            stop_str = f'{self.parameters["tolerance"]} Error'
+        else:
+            stop_str = f'{self.parameters["num_epochs"]} Epoch'
             
-            train_window.set_file(data_file) # indicate the current file in the training window   
-            train_window.file_num_progress.increment()
+        if self.parameters["cycle_fams"]:
+            training_type_str = 'cycled'
+        else:
+            training_type_str = (self.parameters["fam_training"] and 'familiar' or 'unfamiliar')
+            
+        parent_name = simpledialog.askstring(title='Set Result Folder Name', prompt='Please enter a name to save training results under:', initialvalue=f'{stop_str}, {training_type_str}') 
+        if not parent_name: # if file determination returns empty due to user cancellation/omission, exit training routine
+            return
+        else:
+            self.activation_frame.disable()
+            train_window = TrainingWindow(self, parent_name, nw_compat=False) # pass the GUI app to the training window object to allow for menu manipulation     
+            train_window.training(keras_verbosity=0)
 
-            results_folder = Path(parent_folder, f'{data_file} Results') # main folder with all results for a particular data file  
-            results_folder.mkdir(exist_ok=True)        
-
-            json_data = iumsutils.load_chem_json(self.data_path/f'{data_file}.json') # load in the data file for the current ecaluation round
-            chem_data = json_data['chem_data']        # isolate the spectral/chemical data 
-            spectrum_size = json_data['spectrum_size'] # set maximum length to be the full spectrum length of the current dataset
-
-            # SECONDARY TRAINING LOOP, REGULATES CYCLING BETWEEN FAMILIARS AND UNFAMILIARS
-            for familiar_cycling in range(1 + cycle_fams):    
-                start_time = time() # log start time of each cycle, so that training duration can be computed afterwards  
-                
-                fam_training = (self.parameters['fam_training'] ^ familiar_cycling) # xor used to encode the inversion behavior on second cycle    
-                fam_str = f'{fam_training and "F" or "Unf"}amiliar'  
-                self.fam_switch.set_value(fam_training)        # purely cosmetic, but allows the user to see that cycling is in fact occurring
-                train_window.set_familiar_status(fam_str)
-
-                curr_fam_folder = results_folder/fam_str # folder with the results from the current (un)familiar training, parent for all that follow 
-                curr_fam_folder.mkdir(exist_ok=True)
-                log_file_path = curr_fam_folder/'Log File.txt'
-                log_file_path.touch() # make sure the log file exists
-
-                # TERTIARY TRAINING LOOP, REGULATES SLICING
-                for segment in range(n_slices): 
-                    lower_bound, upper_bound = trimming_min, spectrum_size - slice_decrement*segment
-                    point_range = f'Points {lower_bound}-{upper_bound}'
-                    if lower_bound == 0 and upper_bound == spectrum_size: 
-                        point_range = point_range + ' (Full Spectra)' # indicate whether the current slice is in fact truncated
-                   
-                    point_ranges.add(point_range) # add current range to point ranges (will not duplicate if cycling familiars, since point_ranges is a set)
-                    train_window.set_slice(point_range)
-                    curr_slice_folder = curr_fam_folder/point_range
-                    curr_slice_folder.mkdir(exist_ok=True)
-
-                    # INNERMOST TRAINING LOOP, CYCLES THROUGH ALL THE SELECTED EVALUANDS
-                    predictions, round_summary = [
-                        {family : 
-                            {species : {}
-                                for species in sorted((species for species in self.evaluands if iumsutils.get_family(species) == family), key=iumsutils.get_carbon_ordering)
-                            }
-                            for family in sorted(set(iumsutils.get_family(species) for species in self.evaluands))
-                        } 
-                    for i in range(2)]  # outer data structure is the same for both predictions and the round summary
-                    
-                    for evaluand_idx, evaluand in enumerate(self.evaluands):                  
-                        train_window.set_status('Training...')
-                        train_window.round_progress.increment() 
-                        train_window.epoch_progress.set_max(num_epochs) # reset maximum number of epochs on progress bar to specified amount (done each round to handle early stopping)
-
-                        curr_family  = iumsutils.get_family(evaluand)
-                        eval_spectra = [instance.spectrum[lower_bound:upper_bound] for instance in chem_data if instance.species == evaluand]
-                        eval_titles  = [instance.name for instance in chem_data if instance.species == evaluand]
-                        train_window.set_evaluand(f'{evaluand} ({len(eval_titles)} instances found)')
-
-                        # TRAIN/TEST SET CREATION, MODEL CREATION, AND MODEL TRAINING
-                        if not fam_training or evaluand_idx == 0: # train over all evaluands for unfamiliars, but only first evaluand for familiars (training set is same for familiars)
-                            features = [instance.spectrum[lower_bound:upper_bound] for instance in chem_data if instance.species != evaluand or fam_training]
-                            labels   = [instance.vector for instance in chem_data if instance.species != evaluand or fam_training]
-                            x_train, x_test, y_train, y_test = map(np.array, train_test_split(features, labels, test_size=test_set_proportion)) # keras model only accepts numpy arrays
-
-                            train_window.loss_plot.reset(cutoff=(convergence and tolerance or None)) # resetting the loss plot each training round
-                            with tf.device('CPU:0'):     # eschews the requirement for a brand-new NVIDIA graphics card (which we don't have anyways)                      
-                                model = Sequential()     # model block is created, layers are added to this block
-                                if nw_compat:            # provide option to switch between NeuralWare model configuration (for comparison) or optimized standard configuration
-                                    model.add(Dense(150, input_dim=(upper_bound - lower_bound), activation='tanh'))  # 512 neuron input layer, size depends on trimming
-                                    model.add(Dense(len(self.family_mapping), activation='softmax')) # softmax gives probability distribution of identity over all families
-                                    model.compile(loss='categorical_crossentropy', optimizer=RMSprop(lr=learnrate), metrics=['categorical_accuracy']) 
-                                else:   
-                                    model.add(Dense(256, input_dim=(upper_bound - lower_bound), activation='relu'))  # 256 neuron input layer, size depends on trimming      
-                                    model.add(Dropout(0.5))                                          # dropout layer, to reduce overfit
-                                    model.add(Dense(256, activation='relu'))                         # 256 neuron hidden layer
-                                    model.add(Dense(len(self.family_mapping), activation='softmax')) # softmax gives probability distribution of identity over all families
-                                    model.compile(loss='categorical_crossentropy', optimizer=Adam(lr=learnrate), metrics=['categorical_accuracy'])      
-                            hist = model.fit(x_train, y_train, validation_data=(x_test, y_test), callbacks=keras_callbacks, verbose=keras_verbosity, epochs=num_epochs, batch_size=batchsize)
-                    
-                        if model.stop_training: # if training has been interrupted for whatever reason                             
-                            if train_window.end_training: # check if training has been aborted by user as well
-                                messagebox.showerror('Training has Stopped!', 'Training aborted by user;\nProceed from Progress Window', parent=train_window.training_window)
-                                train_window.button_frame.enable()
-                                return # without a return, aborting training only pauses one iteration of loop
-                            
-                            if convergence: # check if training stopped due to convergence being reached. NOTE! - important that this be second for abortion to work during convergence!
-                                train_window.epoch_progress.set_max(convergence_callback.stopped_epoch) # set progress max to stopped epoch, to indicate that training is done   
-                                with log_file_path.open(mode='a') as log_file: 
-                                    log_file.write(f'{fam_training and fam_str or evaluand} training round stopped early at epoch {convergence_callback.stopped_epoch}\n')
-                                convergence_callback.reset_flag() # reset stopped epoch to None for next training round                                           
-
-                        elif save_weights: # otherwise, save the model to the current result directory if saving is enabled
-                            train_window.set_status('Saving Model...')
-                            weights_folder = curr_slice_folder/f'{fam_training and fam_str or evaluand} Model Files'
-                            model.save(str(weights_folder)) # path can only be str, for some reason
-
-                            local_preset = {param : value for param, value in self.parameters.items()} # make a deep copy of the parameters that can be modified locally
-                            local_preset['data_files'  ] = [data_file]  # only retrain using the current file
-                            local_preset['fam_training'] = fam_training # to account for current familiar or unfamiliar status
-                            local_preset['cycle_fams'  ] = False        # ensure no cycling is performed for reproduction
-                            local_preset['read_mode'   ] = 'By Species' # ensure only species-wise reading is being performed
-                            local_preset['selections'  ] = [evaluand]   # only requires a single evaluand (and in the case of familiars, the particular one is not at all relevant)
-                            local_preset['num_slices'  ] = 0            # no slices, only full data 
-                            with open(weights_folder/f'Reproducability Preset ({point_range}).json', 'w') as weights_preset: 
-                                json.dump(local_preset, weights_preset)  # add a preset to each model file that allows for reproduction of ONLY that single model file                      
-
-                        # CREATION OF THE SPECIES SUMMARY OBJECT FOR THE CURRENT EVALUAND, PLOTTING OF EVALUATION RESULTS FOR THE CURRENT EVALUAND 
-                        train_window.set_status('Plotting Results to Folder...')
-                        for inst_name, pred in zip(eval_titles, model.predict(np.array(eval_spectra))): # file predictions into dict
-                            predictions[curr_family][evaluand][inst_name] = [float(i) for i in pred] # convert to list of floats for JSON serialization 
-                            
-                        # obtain and file current evaluand score, plotting summary graphics in the process; overwrites empty dictionary
-                        final_evals = model.evaluate(x_test, y_test, verbose=keras_verbosity)  # keras' self evaluation of loss and categorical_accuracy metric
-                        round_summary[curr_family][evaluand] = plotutils.plot_and_get_score(evaluand, eval_spectra, predictions, hist.history['loss'],
-                                                                                             hist.history['categorical_accuracy'], final_evals, savedir=curr_slice_folder)                
-                    # CALCULATION AND PROCESSING OF RESULTS TO PRODUCE SCORES AND SUMMARIES 
-                    train_window.set_status(f'Unpacking Scores...')
-                    
-                    row_labels, score_list = [], []
-                    for family, species_scores in round_summary.items(): # iterate through species score mapping (skips over omitted families)     
-                        row_labels.append(family)
-                        score_list.append(' ') # skip line in score column
-                        
-                        species_scores['AVERAGE'] = iumsutils.average(species_scores.values()) # compute and append average score to each
-                        for species, score in species_scores.items():
-                            row_labels.append(species)
-                            score_list.append(score)
-                        row_labels.append(' ')   
-                        score_list.append(' ')   # leave a gap between each family
-                                      
-                    # WRITING/PLOTTING RESULTS TO FILES
-                    train_window.set_status(f'Outputting Summaries of Results...')
-                    
-                    prediction_path = curr_slice_folder/'Prediction Values.json'
-                    with prediction_path.open(mode='w', newline='') as pred_file:
-                        json.dump(predictions, pred_file) # save the aavs for the current training
-
-                    plotutils.single_plot(plotutils.Overlaid_Family_RC(predictions, title=f'{data_file} Overall Summary'), curr_slice_folder/'Overall Summary', figsize=8) # save family-overlaid RC as visual result summary
-                           
-                    score_file_path = curr_slice_folder/f'{fam_str} Scores.csv'
-                    iumsutils.add_csv_column(score_file_path, row_labels)
-                    iumsutils.add_csv_column(score_file_path, score_list)
-                    
-                    comp_path = parent_folder/f'Compiled Results - {point_range}, {fam_str}.csv' # path to the relevant compiled results folder
-                    if not comp_path.exists():
-                        iumsutils.add_csv_column(comp_path, [fam_str, *row_labels]) # if the relevant file doesn't exists, make it and add row labels
-                    iumsutils.add_csv_column(comp_path, [data_file, *score_list]) # add a column with the current scores, along with a dataset label, to the collated csv
-                
-                # LOGGING THE DURATION OF TRAINING OVER EACH DATASET
-                with log_file_path.open(mode='a') as log_file:  # log the time taken to complete the training cycle (open in append mode to prevent overwriting)
-                    model.summary(print_fn=lambda x : log_file.write(f'{x}\n')) # write model to log file (since model is same throughout, should only write model on the last pass)
-                    log_file.write(f'\nTraining Time : {iumsutils.format_time(time() - start_time)}') # log the time taken for this particular training session as well
-        
-        # POST-TRAINING WRAPPING-UP   
-        if cycle_fams: # if both familiar and unfamiliar training are being performed, merge the score files together
-            for point_range in point_ranges:
-                fam_path   = parent_folder/f'Compiled Results - {point_range}, Familiar.csv' 
-                unfam_path = parent_folder/f'Compiled Results - {point_range}, Unfamiliar.csv'
-                
-                with unfam_path.open('r') as unfam_file, fam_path.open('a') as fam_file: # read from unfamiliar scores and append to familiar scores
-                    for row in unfam_file:
-                        fam_file.write(row)  
-                        
-                unfam_path.unlink() # delete the unfamiliar file after copying the contents
-                fam_path.rename(fam_path.parent/f'Compiled Results - {point_range}.csv' )  # get rid of "Familiar" affix after merging
-        
-        self.activation_frame.enable() # re-enable training button to allow for smooth retraining
-        train_window.button_frame.enable()  # open up post-training options in the training window
-        train_window.abort_button.configure(state='disabled') # disable the abort button (idiotproofing against its use after training)
-        
-        train_window.set_status(f'Finished in {iumsutils.format_time(time() - overall_start_time)}') # display the time taken for all trainings in the training window
-        if messagebox.askyesno('Training Completed Succesfully!', 'Training finished; view training results in folder?', parent=train_window.training_window):
-            os.startfile(parent_folder) # notify user that training has finished and prompt them to view the results in situ
-        
 if __name__ == '__main__':        
     main_window = tk.Tk()
     app = PLATINUMS_App(main_window)
