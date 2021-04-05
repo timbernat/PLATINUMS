@@ -126,6 +126,7 @@ class Overlaid_Family_RC(Base_RC):
         'Acetates' : 'g',
         'Alcohols' : 'r',
         'Aldehydes': 'c',
+        'Alkanes'  : 'y',
         'Ethers'   : 'b',
         'Ketones'  : 'm'
     }
@@ -162,8 +163,12 @@ class Macro_RC(Base_RC):
 # Line Plot classes
 class Line_Plot:
     '''Basic class of line plot, allows for multiple lines and moveable legends, within the confines of the Mutiplot Framework'''
-    def __init__(self, *args, title=None, legend_pos=None, colormap={'line' : 'c-'}):
+    def __init__(self, *args, x_range=None, title=None, legend_pos=None, colormap={'line' : 'c-'}):
         self.lines = args
+        self.x_data = None
+        if x_range:
+            self.x_data = list(np.linspace(*x_range, num=len(self.lines[0]))) # made into list to avoid annoying numpy multi-element truth value error
+        
         self.legend_pos = legend_pos
         self.colormap = colormap
         self.title = title
@@ -173,7 +178,10 @@ class Line_Plot:
         ax.set_title(self.title)
         
         for line, (label, color) in zip(self.lines, self.colormap.items()):
-            ax.plot(line, color, label=label)
+            if self.x_data: 
+                ax.plot(self.x_data, line, color, label=label)
+            else:
+                ax.plot(line, color, label=label)
             
         if self.legend_pos:
             ax.legend(loc=self.legend_pos)
