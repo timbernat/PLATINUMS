@@ -313,7 +313,7 @@ class SelectionWindow:
         
         
 class DynamicPlot:
-    def __init__(self, main, title, xlabel, ylabel, x_default=100, y_default=1, figsize=5, dpi=45, row=0, col=0, rs=1, cs=1):
+    def __init__(self, main, title, xlabel, ylabel, x_default=100, y_default=1, figsize=5, dpi=45, line_color='r', row=0, col=0, rs=1, cs=1):
         '''A matplotlib plot embedded in a TK window which can efficiently plot and update lines through arbitrary point'''
         self.fig = plt.figure(figsize=(figsize, figsize), dpi=dpi)       
         self.plot_window = FigureCanvasTkAgg(self.fig, main)
@@ -327,7 +327,7 @@ class DynamicPlot:
 
         self.bg = None
         self.x, self.y = [], []  
-        (self.line,) = self.ax.plot(self.x, self.y, 'r-', animated=True)
+        (self.line,) = self.ax.plot(self.x, self.y, line_color + '-', animated=True) # add expandibility for multiple lines here
         self.reset()
         
     def __del__(self):
