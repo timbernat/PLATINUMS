@@ -73,18 +73,19 @@ class Base_RC:
     def set_uc_mapping(cls, mapping): # sets background unit circle mapping for class - !!NOTE!! must be prior to use in order for RCs to work
         cls.unit_circle = Mapped_Unit_Circle(mapping)
         
-    def __init__(self, title, points, point_marker='gx', centroid_marker='b*'):
+    def __init__(self, title, points, point_symbol='gx', centroid_symbol='b*'):
         self.title = title
         self.points = points
         
-        self.point_marker = point_marker
+        self.point_symbol = point_symbol
         self.centroid = sum(self.points)/len(points)
-        self.centroid_marker = centroid_marker
+        self.centroid_symbol = centroid_symbol
    
-    def plot_point(self, coords, ax, marker='ro', size=6):
+    def plot_point(self, coords, ax, symbol='ro', size=6):
+        color, marker = symbol # unpack color and marker info from passed symbol - allows for tuple of color and marker to bypass single-character limit
         if type(coords) != tuple:
             coords = (coords.real, coords.imag)
-        ax.plot(*coords, marker, markersize=size) 
+        ax.plot(*coords, color=color, marker=marker, markersize=size) 
         
     def draw(self, axes, index=(0,0)):
         ax = axes[index] # index subplots within the passed plt.Axes object
@@ -94,49 +95,54 @@ class Base_RC:
             self.unit_circle.draw(ax) # plot the unit circle background
         
         for point in self.points:
-            self.plot_point(point, ax, marker=self.point_marker)
+            self.plot_point(point, ax, symbol=self.point_symbol)
             
-        if self.centroid_marker: # only plot the centroid if it is called for
-            self.plot_point(self.centroid, ax, marker=self.centroid_marker, size=14)
+        if self.centroid_symbol: # only plot the centroid if it is called for
+            self.plot_point(self.centroid, ax, symbol=self.centroid_symbol, size=14)
             
 class Instance_RC(Base_RC):
     '''0-order Radar Chart class for plotting the axial components and single centroid of a single instance'''
-    def __init__(self, dataset, inst_name, point_marker='gx', centroid_marker='b1'):
+    def __init__(self, dataset, inst_name, point_symbol='gx', centroid_symbol='b1'):
         aavs = dataset[get_family(inst_name)][isolate_species(inst_name)][inst_name] # perform the appropriate lookup for the species
         axial_points = [aav*pole for (aav, pole) in zip(aavs, Base_RC.unit_circle.poles)] # multiply aavs by axial conponents to obtain set of points
         
-        super().__init__(inst_name, axial_points, point_marker, centroid_marker)
+        super().__init__(inst_name, axial_points, point_symbol, centroid_symbol)
         self.centroid *= Base_RC.unit_circle.N # scale centroid by number of points in this case to better adhere to unit circle
         
 class Species_RC(Base_RC):
     '''1-order Radar Chart class for plotting centroid of all instances of a species'''
-    def __init__(self, dataset, species, point_marker='b1', centroid_marker='m*'):
+    def __init__(self, dataset, species, point_symbol='b1', centroid_symbol='m*'):
         inst_centroids = [Instance_RC(dataset, instance).centroid for instance in dataset[get_family(species)][species]]
-        super().__init__(species, inst_centroids, point_marker, centroid_marker)
+        super().__init__(species, inst_centroids, point_symbol, centroid_symbol)
         
 class Family_RC(Base_RC):
     '''2-order Radar Chart class for plotting centroid of all instances of a family'''
-    def __init__(self, dataset, family, point_marker='m*', centroid_marker='cs'):
+    def __init__(self, dataset, family, point_symbol='m*', centroid_symbol='cs'):
         spec_centroids = [Species_RC(dataset, species).centroid for species in dataset[family]]
-        super().__init__(family, spec_centroids, point_marker, centroid_marker)
+        super().__init__(family, spec_centroids, point_symbol, centroid_symbol)
 
 class Overlaid_Family_RC(Base_RC):
     '''2.5-order Radar Chart class for plotting all families on a single diagram, color-coded '''
-    colors  = {
-        'Acetates' : 'g',
-        'Alcohols' : 'r',
-        'Aldehydes': 'c',
-        'Alkanes'  : 'y',
-        'Ethers'   : 'b',
-        'Ketones'  : 'm'
+    colors = { # full color mapping given all currently supported chemical families
+            'Acetates' : 'g', 
+            'Alcohols' : 'r',
+            'Aldehydes': 'c',
+            'Alkanes'  : 'y',
+            'Alkenes'  : 'tab:pink',
+            'Alkynes'  : 'tab:purple',
+            'Amines'   : 'lime',
+            'Carboxylic Acids' : 'tab:orange',
+            'Ethers'   : 'b',
+            'Ketones'  : 'm'
     }
-    point_marker = '^'
+    point_marker = '^' # allows for easy interchange of marker symbols
     centroid_marker = 'x'
     
     def __init__(self, dataset, title='Family Overlay'):
         self.title = title
-        self.famsds = [Family_RC(dataset, family, point_marker=self.colors[family]+self.point_marker, 
-                                                  centroid_marker=self.colors[family]+self.centroid_marker) for family in dataset]
+        self.point_symbols = {family : (self.colors[family], self.point_marker) for family in dataset}
+        self.centroid_symbols = {family : (self.colors[family], self.centroid_marker) for family in dataset}
+        self.famsds = [Family_RC(dataset, family, point_symbol=self.point_symbols[family], centroid_symbol=self.centroid_symbols[family]) for family in dataset]
     
     def draw(self, axes, index=(0,0)):
         ax = axes[index]
@@ -144,26 +150,20 @@ class Overlaid_Family_RC(Base_RC):
             fsd.draw(axes, index) # draw over one another
         ax.set_title(self.title)
             
-        markers = [ax.scatter(np.nan, np.nan, color=color, marker=self.point_marker) for color in self.colors.values()] # plot fake points for legend
-        ax.legend(markers, self.colors.keys(), loc='lower right')
-
-class Macro_RC(Base_RC):
-    '''3-order Radar Chart from plotting trends across all data'''
-    def __init__(self, dataset, point_marker='cs', centroid_marker='gp'):
-        fam_centroids = [Family_RC(dataset, family).centroid for family in dataset]
-        super().__init__('All Families', fam_centroids, point_marker, centroid_marker) 
+        symbols = [ax.scatter(np.nan, np.nan, color=color, marker=marker) for (color, marker) in self.point_symbols.values()] # plot fake points for legend
+        ax.legend(symbols, self.point_symbols.keys(), loc='lower right')
         
 class Macro_RC(Base_RC):
     '''3-order Radar Chart from plotting trends across all data'''
-    def __init__(self, dataset, point_marker='cs', centroid_marker='gp'):
+    def __init__(self, dataset, point_symbol='cs', centroid_symbol='gp'):
         fam_centroids = [Family_RC(dataset, family).centroid for family in dataset]
-        super().__init__('All Families', fam_centroids, point_marker, centroid_marker) 
+        super().__init__('All Families', fam_centroids, point_symbol, centroid_symbol) 
        
     
 # Line Plot classes
 class Line_Plot:
     '''Basic class of line plot, allows for multiple lines and moveable legends, within the confines of the Mutiplot Framework'''
-    def __init__(self, *args, x_range=None, title=None, legend_pos=None, colormap={'line' : 'c-'}):
+    def __init__(self, *args, x_range=None, title=None, legend_pos=None, colormap={'line' : 'c'}):
         self.lines = args
         self.x_data = None
         if x_range:
@@ -212,8 +212,8 @@ class PWA_Plot(Line_Plot):
         
 class Single_Line_Plot(Line_Plot):
     '''Syntactic sugar for plotting a single line'''
-    def __init__(self, line, title=None, legend_pos=None, label='line', marker='c-'):
-        super().__init__(line, title=title, legend_pos=legend_pos, colormap={label : marker})
+    def __init__(self, line, title=None, legend_pos=None, label='line', color='c'):
+        super().__init__(line, title=title, legend_pos=legend_pos, colormap={label : color})
         
 class Fermi_Plot(Single_Line_Plot):
     '''Class for producing Fermi-Dirac plots from species-wide aavs'''
@@ -226,7 +226,7 @@ class Fermi_Plot(Single_Line_Plot):
         n_total = len(predictions) 
         self.score = round(n_correct/n_total, precision)
         
-        super().__init__(normalized(targets), title=f'{species}, {n_correct}/{n_total} correct', marker='m-')
+        super().__init__(normalized(targets), title=f'{species}, {n_correct}/{n_total} correct', color='m-')
         
         
 # Bar Chart classes
