@@ -180,7 +180,7 @@ class LabelledEntry:
     
 class Switch: 
     '''An interactive switch button, clicking inverts the boolean state and status display. State can be accessed via the <self>.value attribute'''
-    def __init__(self, frame, text, default=False, dep_state='normal', dependents=None, underline=None, width=10, 
+    def __init__(self, frame, text, default=False, dep_state='normal', dependents=None, toggle_action=None, underline=None, width=10, 
                  on_text='Enabled', on_color='green2', off_color='red', off_text='Disabled', row=0, col=0):
         self.label = tk.Label(frame, text=text, underline=underline)
         self.label.grid(row=row, column=col)
@@ -192,11 +192,14 @@ class Switch:
         self.off_text = off_text
         self.off_color = off_color
     
-        self.dependents = dependents
+        self.dependents = dependents # list containing other tk or ttl objects who's normal/disabled status depends on this switch instance's value
         self.dep_state = dep_state
-        self.value = None
+        self.toggle_action = toggle_action # an additional action to be carried out on each toggle operation; must be a method that takes a boolean argument
+        self.value = default
         self.default = default
-        self.reset_default()
+    
+    def reset_default(self):
+        self.set_value(self.default)
     
     def get_value(self):
         return self.value
@@ -211,9 +214,6 @@ class Switch:
             for widget in self.dependents:
                 widget.configure(state=self.dep_state)
                 
-    def reset_default(self):
-        self.set_value(self.default)
-                
     def enable(self):
         self.set_value(True)
      
@@ -224,7 +224,10 @@ class Switch:
         if self.value:
             self.disable()
         else:
-            self.enable()  
+            self.enable()
+        
+        if self.toggle_action: # execute the toggle action if one is specified
+            self.toggle_action(self.value)
            
         
 class GroupableCheck:
