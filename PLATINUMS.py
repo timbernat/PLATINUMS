@@ -97,7 +97,8 @@ class PLATINUMS_App:
         self.tolerance_entry = ttl.LabelledEntry(self.param_frame, text='Tolerance:', var=tk.DoubleVar(), default=0.01, width=16, row=2, col=2, spacing=(6, 0))      
         self.fam_switch   = ttl.Switch(self.param_frame, text='Familiar Training:',  underline=0, row=0, col=0)
         self.cycle_switch = ttl.Switch(self.param_frame, text='Cycle Familiars: ',   underline=1, row=1, col=0)
-        self.convergence_switch  = ttl.Switch(self.param_frame, text='Convergence:', underline=3, row=2, col=0, dependents=(self.tolerance_entry,))
+        self.convergence_switch  = ttl.Switch(self.param_frame, text='Convergence:', underline=3, row=2, col=0, dependents=(self.tolerance_entry,),
+                                             toggle_action=lambda state : self.epoch_entry.set_value(state and 10**6 or self.parameters['num_epochs'])) # toggle epochs based on convergence
         self.save_switch  = ttl.Switch(self.param_frame, text='Save Weights:',       underline=5, row=3, col=0) 
         
         self.blank_var   = tk.BooleanVar()
@@ -352,6 +353,9 @@ class PLATINUMS_App:
         '''Confirm training parameter selections, perform pre-training error checks if necessary'''
         for field, param in self.tparam_mapping.items():
             self.parameters[param] = field.get_value() # configure parameters based on the switch values
+            
+        if self.convergence_switch.get_value(): # update the number of epochs in the parameters dict (to reflect the visual change in the GUI) if convergence is enabled
+            self.parameters['num_epochs'] = self.epoch_entry.get_value() 
 
         if self.save_preset.get(): # if the user has elected to save the current preset
             preset_path = Path( filedialog.asksaveasfilename(title='Save Preset to file', initialdir='./Training Presets', defaultextension='.json', filetypes=[('JSONs', '*.json')]) )
