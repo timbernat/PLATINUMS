@@ -20,7 +20,7 @@ from sklearn.model_selection import train_test_split
 # Neural Net Libraries
 import tensorflow as tf                    
 from tensorflow.keras.optimizers import Adam, RMSprop, SGD # use sgd for NW param optimizer (RMS is loss metric, NOT optimizer)
-from tensorflow.keras.metrics import RootMeanSquaredError, CategoricalAccuracy 
+from tensorflow.keras.metrics import RootMeanSquaredError, CategoricalAccuracy, CategoricalCrossentropy  
 #from tensorflow.keras.losses import MeanSquaredError, CategoricalCrossentropy # builtin reference by string supported
 from tensorflow.keras.models import Sequential, load_model
 from tensorflow.keras.layers import Dense, Dropout
@@ -31,35 +31,26 @@ tf.get_logger().setLevel('ERROR') # suppress deprecation warnings which seem to 
 # SECTION 1 : custom classes needed to operate some features of the main GUI  ---------------------------------------------------                   
 class TWInter(Callback):   
     '''A callback for interfacing between the keras' model training and the training window GUI'''
-    def __init__(self, training_window, metric='loss'):
+    def __init__(self, training_window, metric='loss', tolerance=None):
         self.tw = training_window
         self.metric = metric
+        self.tolerance = tolerance
     
     def on_epoch_begin(self, epoch, logs=None): # update the epoch progress bar at the start of each epoch
         if epoch == 0: # reset progress bar with each new training
             self.tw.epoch_progress.reset()      
+            
         self.tw.epoch_progress.increment() # increment progress each epoch
         self.tw.app.main.update() # allows for mobility of the main window while training
         
     def on_epoch_end(self, epoch, logs=None):  # abort training if the abort flag has been raised by the training window
-        self.tw.loss_plot.update(epoch, logs.get(self.metric))
+        self.tw.loss_plot.update(epoch, logs.get(self.metric))  # plot each new error value in window
+       
         if self.tw.abort_flag:
-            self.model.stop_training = True # done in case training is occurring when abort is issued
-            
-class Convergence(Callback):   
-    '''A callback which facilitates early stopping of training when loss convergence is reached'''
-    def __init__(self, threshold, metric='loss'):
-        self.threshold = threshold
-        self.stopped_epoch = None
-        self.metric = metric
-        
-    def on_epoch_end(self, epoch, logs=None):  # abort training if the abort flag has been raised by the training window
-        if logs.get(self.metric) < self.threshold:
+            self.model.stop_training = True # done in case training is occurring when abort is issued         
+        elif self.tolerance and logs.get(self.metric) < self.tolerance: # only check for convergence if  tolerance value is specified
             self.model.stop_training = True # immediately terminate training
-            self.stopped_epoch = epoch + 1  # flag current epoch (1-indexed) as the point of termination
-            
-    def reset_flag(self):
-        self.stopped_epoch = None
+            self.tw.stopped_epoch = epoch + 1  # flag current epoch (1-indexed) as the point of termination
 
 class TrainingWindow(): 
     '''The window which displays training progress and information, subclassed TopLevel allows it to be separate from the main GUI'''
@@ -69,8 +60,9 @@ class TrainingWindow():
         self.main   = frontend_app.main # mirroring relevant methods and attributes to the current trainer object      
         self.parent_name = parent_name # the path to the folder in which training results will be saved
         
+        self.stopped_epoch = 0
         self.nw_compat = nw_compat
-        self.metric = (nw_compat and 'rmse' or 'loss')
+        self.metric = (nw_compat and 'rmse' or 'cat_ent')
         
         self.mapping   = frontend_app.family_mapping       
         self.evaluands = frontend_app.evaluands            
@@ -79,14 +71,7 @@ class TrainingWindow():
         # param names: 'data_files','num_epochs', 'batchsize','learnrate', 'slice_decrement','trimming_min','num_slices','cycle_fams','fam_training','save_weights','convergence','tolerance'
         self.parameters = frontend_app.parameters # copy over parameters dict for reference when writing presets
         for param, value in frontend_app.parameters.items():
-            setattr(self, param, value) # individually copy over parameters internally for reference
-
-        # determining which callbacks to inject into training
-        self.keras_callbacks = [TWInter(self, metric=self.metric)] # in every case, add the tkinter-keras interface callback to the callbacks list   
-        if self.convergence:
-            self.num_epochs = 1000000 # set epoch size to very large number to account for unconstrained traning
-            self.convergence_callback = Convergence(self.tolerance, metric=self.metric) # named so this parameter can be referenced within code after stopping
-            self.keras_callbacks.append(self.convergence_callback)
+            setattr(self, param, value) # individually copy over parameters internally for reference 
         
     # CREATING THE TRAINING WINDOW ITSELF
         self.training_window = tk.Toplevel(self.main)
@@ -158,8 +143,8 @@ class TrainingWindow():
         
         self.training_window.bind('<Key>', self.key_bind)
     
-    def __del__(self):
-        print('Training Window destructor called')
+    #def __del__(self):
+    #    print('Training Window destructor called')
     
     # DEFINE DYNAMIC KEYBINDINGS
     def key_bind(self, event):
@@ -170,7 +155,7 @@ class TrainingWindow():
             elif event.char == 'r':
                 self.reset_main()
             elif event.char == 'q':
-                self.quit()
+                self.quit_main()
         elif self.abort_button.cget('state') == 'normal' and event.char == 'b':
             self.abort()
     
@@ -197,6 +182,7 @@ class TrainingWindow():
         self.abort_flag = False
     
     def reset(self):
+        self.stopped_epoch = 0
         for prog_bar in self.prog_bars:
             prog_bar.set_progress(0)
             self.main.update() # progress bars sometimes appear frozen when no update occurs???
@@ -341,7 +327,7 @@ class TrainingWindow():
 
                         curr_family  = iumsutils.get_family(evaluand)
                         header = (local_fam_training and fam_str or evaluand) # label unfamiliar trainings with the current evaluand and familiar trainings as simply "familiar"
-                        evals, non_evals = iumsutils.partition(chem_data, condition=lambda inst : inst.species == evaluand) # partition the dataset into instances belonging and not belonging to the current evaluand species
+                        evals, non_evals = iumsutils.partition(chem_data, condition=lambda inst : inst.species == evaluand) # partition dataset into list of current evaluands and list of all other species
                         self.set_evaluand(f'{evaluand} ({len(evals)} instances found)')
                         
                         eval_spectra = [instance.spectrum[lower_bound:upper_bound] for instance in evals]
@@ -354,9 +340,11 @@ class TrainingWindow():
                             trainees = (local_fam_training and chem_data or non_evals) # train over all instances for familiars, or non-evaluands instances for unfamiliars 
                             features = np.array([instance.spectrum[lower_bound:upper_bound] for instance in trainees]) # extract features and labels, casting them to np arrays for training
                             labels   = np.array([instance.vector for instance in trainees]) 
-                            x_train, x_test, y_train, y_test = train_test_split(features, labels, test_size=test_set_proportion) # split features and labels into train and test sets based on the predefined proportion
+                            x_train, x_test, y_train, y_test = train_test_split(features, labels, test_size=test_set_proportion) # split features and labels into train and test sets
 
-                            self.loss_plot.reset(cutoff=(self.convergence and self.tolerance or None)) # resetting the loss plot each training round
+                            threshold = (self.convergence and self.tolerance or None) # value of error threshold to apply (None if not training to convergence)
+                            self.loss_plot.reset(cutoff=threshold) # resetting the loss plot each training round
+                            
                             with tf.device('CPU:0'):     # eschews the requirement for a brand-new NVIDIA graphics card (which we don't have anyways)                      
                                 model = Sequential()     # model block is created, layers are added to this block
                                 if self.nw_compat:            # provide option to switch between NeuralWare model configuration (for comparison) or optimized standard configuration
@@ -368,19 +356,22 @@ class TrainingWindow():
                                     model.add(Dropout(0.5))                                   # dropout layer, to reduce overfit
                                     model.add(Dense(256, activation='relu'))                  # 256 neuron hidden layer
                                     model.add(Dense(len(self.mapping), activation='softmax')) # softmax gives probability distribution of identity over all families
-                                    model.compile(loss='categorical_crossentropy', optimizer=Adam(lr=self.learnrate), metrics=[CategoricalAccuracy(name='cat_acc')])      
-                            hist = model.fit(x_train, y_train, validation_data=(x_test, y_test), callbacks=self.keras_callbacks, verbose=keras_verbosity, epochs=self.num_epochs, batch_size=self.batchsize)
+                                    model.compile(loss='categorical_crossentropy', optimizer=Adam(lr=self.learnrate), metrics=[CategoricalCrossentropy(name='cat_ent')])      
+                            hist = model.fit(x_train, y_train, validation_data=(x_test, y_test), epochs=self.num_epochs, batch_size=self.batchsize,
+                                            verbose=keras_verbosity, callbacks=[TWInter(self, metric=self.metric, tolerance=threshold)] ) # inject keras-to-window interface into training
                         
                         # CHECKS TO DETERMINE WHETHER TO ABORT TRAINING, STOP TRAINING DUE TO CONVERGENCE, OR PROCEED AS PLANNED
-                        if self.abort_flag: # check if training has been aborted by user as well
+                        if self.abort_flag: # check if training has been aborted by user - if so, abort, log it, and end training
                             self.abort()
+                            with log_file_path.open(mode='a') as log_file: 
+                                log_file.write(f'Training aborted after {iumsutils.format_time(time.time() - overall_start_time)}\n')
                             return # without a return, aborting training only pauses one iteration of loop                      
                         else:
-                            if model.stop_training and self.convergence: # check if training stopped due to convergence being reached. 
-                                self.epoch_progress.set_max(self.convergence_callback.stopped_epoch) # set progress max to stopped epoch, to indicate that training is done   
+                            if self.convergence and model.stop_training: # check if training stopped due to convergence being reached. 
+                                self.epoch_progress.set_max(self.stopped_epoch) # set progress max to stopped epoch, to indicate that training is done   
                                 with log_file_path.open(mode='a') as log_file: 
-                                    log_file.write(f'{header} training round stopped early at epoch {self.convergence_callback.stopped_epoch}\n')
-                                self.convergence_callback.reset_flag() # reset stopped epoch to None for next training round 
+                                    log_file.write(f'Stopping: {header} error converged to {self.tolerance} at epoch {self.stopped_epoch}\n')
+                                self.stopeed_epoch = 0 # reset stopped epoch for next training round 
 
                             if self.save_weights: # otherwise, save the model to the current result directory if saving is enabled
                                 self.set_status('Saving Model...')
@@ -404,7 +395,7 @@ class TrainingWindow():
 
                             # obtain and file current evaluand score, plotting summary graphics in the process; overwrites empty dictionary
                             final_evals = model.evaluate(x_test, y_test, verbose=keras_verbosity)  # keras' self evaluation of loss and metrics - !NOTE! - resets model.stop_training flag
-                            loss, metric = hist.history['loss'], hist.history[self.nw_compat and 'rmse' or 'cat_acc'] # get loss and metric history from the training run 
+                            loss, metric = hist.history['loss'], hist.history[self.metric] # get loss and metric history from the training run 
                             round_summary[curr_family][evaluand] = plotutils.plot_and_get_score(evaluand, eval_spectra, predictions, loss, metric, final_evals, savedir=curr_slice_folder)   
                             losses[header] = loss # add current loss to dict for the current training round                         
                                                      
