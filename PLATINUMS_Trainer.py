@@ -62,7 +62,7 @@ class TrainingWindow():
         
         self.stopped_epoch = 0
         self.nw_compat = nw_compat
-        self.metric = (nw_compat and 'rmse' or 'cat_ent')
+        self.metric = (nw_compat and 'RMSE' or 'Categorical_Entropy') # for the time being, remember to change this in layer config as well
         
         self.mapping   = frontend_app.family_mapping       
         self.evaluands = frontend_app.evaluands            
@@ -350,13 +350,13 @@ class TrainingWindow():
                                 if self.nw_compat:            # provide option to switch between NeuralWare model configuration (for comparison) or optimized standard configuration
                                     model.add(Dense(150, input_dim=(upper_bound - lower_bound), activation='tanh'))  # 512 neuron input layer, size depends on trimming
                                     model.add(Dense(len(self.mapping), activation='softmax')) # softmax gives probability distribution of identity over all families
-                                    model.compile(loss='categorical_crossentropy', optimizer=RMSprop(lr=self.learnrate), metrics=[RootMeanSquaredError(name='rmse')]) 
+                                    model.compile(loss='categorical_crossentropy', optimizer=RMSprop(lr=self.learnrate), metrics=[RootMeanSquaredError(name='RMSE')]) 
                                 else:   
                                     model.add(Dense(256, input_dim=(upper_bound - lower_bound), activation='relu'))  # 256 neuron input layer, size depends on trimming      
                                     model.add(Dropout(0.5))                                   # dropout layer, to reduce overfit
                                     model.add(Dense(256, activation='relu'))                  # 256 neuron hidden layer
                                     model.add(Dense(len(self.mapping), activation='softmax')) # softmax gives probability distribution of identity over all families
-                                    model.compile(loss='categorical_crossentropy', optimizer=Adam(lr=self.learnrate), metrics=[CategoricalCrossentropy(name='cat_ent')])      
+                                    model.compile(loss='categorical_crossentropy', optimizer=Adam(lr=self.learnrate), metrics=[CategoricalCrossentropy(name='Categorical_Entropy')])      
                             hist = model.fit(x_train, y_train, validation_data=(x_test, y_test), epochs=self.num_epochs, batch_size=self.batchsize,
                                             verbose=keras_verbosity, callbacks=[TWInter(self, metric=self.metric, tolerance=threshold)] ) # inject keras-to-window interface into training
                         
@@ -394,10 +394,11 @@ class TrainingWindow():
                                 predictions[curr_family][evaluand][inst_name] = [float(i) for i in pred] # convert from np array of numpy float to list of floats for JSON serialization 
 
                             # obtain and file current evaluand score, plotting summary graphics in the process; overwrites empty dictionary
-                            final_evals = model.evaluate(x_test, y_test, verbose=keras_verbosity)  # keras' self evaluation of loss and metrics - !NOTE! - resets model.stop_training flag
-                            loss, metric = hist.history['loss'], hist.history[self.metric] # get loss and metric history from the training run 
-                            round_summary[curr_family][evaluand] = plotutils.plot_and_get_score(evaluand, eval_spectra, predictions, loss, metric, final_evals, savedir=curr_slice_folder)   
-                            losses[header] = loss # add current loss to dict for the current training round                         
+                            losses[header] = hist.history['loss'] # add current loss to dict for the current training round 
+                            # (below) getting metric value (i=1) from keras' self evaluation and formatting to 3 decimal places - !!NOTE!! resets model.stop_training flag when called
+                            metric_final = np.format_float_positional(model.evaluate(x_test, y_test, verbose=keras_verbosity)[1], precision=3)   
+                            round_summary[curr_family][evaluand] = plotutils.plot_and_get_score(evaluand, eval_spectra, predictions, hist.history[self.metric],
+                                                                                                metric_final, savedir=curr_slice_folder, metric_name='Error') 
                                                      
                     # CALCULATION AND PROCESSING OF RESULTS TO PRODUCE SCORES AND SUMMARIES 
                     self.set_status(f'Unpacking Scores...')     
