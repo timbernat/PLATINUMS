@@ -24,7 +24,7 @@ class PLATINUMS_App:
     def __init__(self, main):       
     #Main Window
         self.main = main
-        self.main.title('PLATINUMS v-7.0.0a') # set name with version here
+        self.main.title('PLATINUMS v-7.0.5a') # set name with version here
         self.parameters = {}
         
         for path_type, path in self.default_paths.items(): # on creation, reference class-wide default paths to set up appropriate folders
