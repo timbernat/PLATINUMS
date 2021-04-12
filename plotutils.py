@@ -162,7 +162,7 @@ class Macro_RC(Base_RC):
     
 # Line Plot classes
 class Line_Plot:
-    '''Basic class of line plot, allows for multiple lines and moveable legends, within the confines of the Mutiplot Framework'''
+    '''Basic class for plotting lines, allows for multiple lines, scalable x-axis, and moveable legends, within the confines of the Multiplot framework'''
     def __init__(self, *args, x_range=None, title=None, legend_pos=None, colormap={'line' : 'c'}):
         self.lines = args
         self.x_data = None
@@ -186,16 +186,13 @@ class Line_Plot:
         if self.legend_pos:
             ax.legend(loc=self.legend_pos)
             
-class Metric_Plot(Line_Plot):
-    '''Subclass of Line_Plot for plotting training metrics'''
-    colormap = {'Loss' : 'r', 'Accuracy' : 'g'}
-    
-    def __init__(self, losses, accuracies, evals):
-        self.title = f'Loss, Acc={[round(i, 3) for i in evals]}'
-        super().__init__(losses, accuracies, title=self.title, legend_pos='center right', colormap=self.colormap)
+class Single_Line_Plot(Line_Plot):
+    '''Syntactic sugar for plotting a single line'''
+    def __init__(self, line, title=None, legend_pos=None, label='line', color='c'):
+        super().__init__(line, title=title, legend_pos=legend_pos, colormap={label : color})
         
 class PWA_Plot(Line_Plot):
-    '''Point-Wise Aggregate plot generation class'''
+    '''Child class of Line_Plot for generating Point-Wise Aggregate spectral plots'''
     colormap={
         'Maxima' : 'b',
         'Averages' : 'r',
@@ -209,14 +206,8 @@ class PWA_Plot(Line_Plot):
         self.minima   = np.amin(self.spectra, axis=0)
         super().__init__(self.maxima, self.averages, self.minima, title=species, legend_pos='upper right', colormap=self.colormap)
         
-        
-class Single_Line_Plot(Line_Plot):
-    '''Syntactic sugar for plotting a single line'''
-    def __init__(self, line, title=None, legend_pos=None, label='line', color='c'):
-        super().__init__(line, title=title, legend_pos=legend_pos, colormap={label : color})
-        
 class Fermi_Plot(Single_Line_Plot):
-    '''Class for producing Fermi-Dirac plots from species-wide aavs'''
+    '''Child class of Single_Line_Plot for producing Fermi-Dirac plots from species-wide aavs'''
     def __init__(self, dataset, species, hotbit, precision=4):
         predictions = dataset[get_family(species)][species].values() # pull out a list of aavs      
         targets = [pred[hotbit] for pred in predictions]
@@ -227,6 +218,14 @@ class Fermi_Plot(Single_Line_Plot):
         self.score = round(n_correct/n_total, precision)
         
         super().__init__(normalized(targets), title=f'{species}, {n_correct}/{n_total} correct', color='m-')
+        
+class Loss_Acc_Plot(Line_Plot):
+    '''Child class of Single_Line_Plot for plotting training loss and accuracy'''
+    colormap = {'Loss' : 'r', 'Accuracy' : 'g'}
+    
+    def __init__(self, losses, accuracies, evals):
+        self.title = f'Loss, Acc={[round(i, 3) for i in evals]}'
+        super().__init__(losses, accuracies, title=self.title, legend_pos='center right', colormap=self.colormap)
         
         
 # Bar Chart classes
@@ -275,18 +274,20 @@ class AAV_Bars(Multibar):
         super().__init__(families, [inst_name], aavs, title=inst_name, ylim=(0,1))
         
 # miscellaneous/combined classes
-def plot_and_get_score(species, spectra, dataset, losses, accuracies, evals, savedir='.'):
+def plot_and_get_score(species, spectra, dataset, metric_data, metric_final, savedir='.', metric_name='Error'):
     '''Rolls several classes into one convenient method for producing species summary plots and generating scores'''
     frame = Multiplot(nrows=2, ncols=2)
 
-    radar_chart = Species_RC(dataset, species)
+    radar_chart = Species_RC(dataset, species) # radar chart not created in-place to extract the hot bit
     hotbit = radar_chart.unit_circle.mapping[get_family(species)].index(1) # deduce hotbit from mapping and current species
     
     fermi_plot = Fermi_Plot(dataset, species, hotbit) # fermi plot not created in-place in order to extract the score
     score = fermi_plot.score
     
+    metric_plot = Single_Line_Plot(metric_data, title=f'Final {metric_name}: {metric_final}', color='r')
+    
     frame.draw(PWA_Plot(spectra, species), 0)
-    frame.draw(Metric_Plot(losses, accuracies, evals), 1)
+    frame.draw(metric_plot, 1)
     frame.draw(fermi_plot, 2)  
     frame.draw(radar_chart, 3)
     frame.save(f'{savedir}/{species}') # draw all four panels, then save the figure to the appropriate folder under the species' name
